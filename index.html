@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title id="page-title">Expertise Finder</title>
+  <meta name="description" id="page-description" content="">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="landingContent.js"></script>
+  <style>
+    body { 
+      font-family: 'DM Sans', system-ui, sans-serif; 
+    }
+    .hero-gradient {
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 25%, #fcd34d 50%, #f59e0b 75%, #ea580c 100%);
+    }
+    .text-gradient {
+      background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .card-hover {
+      transition: all 0.3s ease;
+    }
+    .card-hover:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 20px 40px -12px rgba(245, 158, 11, 0.25);
+    }
+    .step-line {
+      background: linear-gradient(180deg, #f59e0b 0%, #ea580c 100%);
+    }
+    @keyframes float {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-10px); }
+    }
+    .float-animation {
+      animation: float 3s ease-in-out infinite;
+    }
+    @keyframes fade-up {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-up {
+      animation: fade-up 0.6s ease-out forwards;
+    }
+    .animate-delay-1 { animation-delay: 0.1s; opacity: 0; }
+    .animate-delay-2 { animation-delay: 0.2s; opacity: 0; }
+    .animate-delay-3 { animation-delay: 0.3s; opacity: 0; }
+    .animate-delay-4 { animation-delay: 0.4s; opacity: 0; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased">
+  
+  <!-- NAVIGATION -->
+  <nav class="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200/50">
+    <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-orange-200">
+          <span data-lucide="users" class="w-5 h-5 text-white"></span>
+        </div>
+        <span id="nav-logo" class="text-xl font-bold text-slate-800"></span>
+      </div>
+      <a href="app.html" id="nav-cta" class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold hover:from-amber-600 hover:to-orange-600 transition-all shadow-lg shadow-orange-200/50"></a>
+    </div>
+  </nav>
+
+  <!-- HERO SECTION -->
+  <section class="relative pt-32 pb-20 overflow-hidden">
+    <!-- Background decoration -->
+    <div class="absolute inset-0 hero-gradient opacity-10"></div>
+    <div class="absolute top-20 right-0 w-96 h-96 bg-gradient-to-br from-amber-400/20 to-orange-500/20 rounded-full blur-3xl"></div>
+    <div class="absolute bottom-0 left-0 w-80 h-80 bg-gradient-to-tr from-orange-400/20 to-amber-500/20 rounded-full blur-3xl"></div>
+    
+    <div class="relative max-w-6xl mx-auto px-6 text-center">
+      <h1 id="hero-headline" class="text-5xl md:text-6xl lg:text-7xl font-bold text-slate-900 leading-tight mb-6 animate-fade-up"></h1>
+      <p id="hero-subheadline" class="text-xl md:text-2xl text-slate-600 max-w-3xl mx-auto mb-10 animate-fade-up animate-delay-1"></p>
+      <div class="flex flex-col sm:flex-row gap-4 justify-center animate-fade-up animate-delay-2">
+        <a href="app.html" id="hero-primary-cta" class="px-8 py-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 text-white text-lg font-semibold hover:from-amber-600 hover:to-orange-600 transition-all shadow-xl shadow-orange-300/40 hover:shadow-orange-400/50 hover:-translate-y-0.5"></a>
+        <a href="#how-it-works" id="hero-secondary-cta" class="px-8 py-4 rounded-2xl border-2 border-slate-300 text-slate-700 text-lg font-semibold hover:border-slate-400 hover:bg-slate-100 transition-all"></a>
+      </div>
+      
+      <!-- Floating illustration -->
+      <div class="mt-16 float-animation">
+        <div class="mx-auto w-full max-w-4xl bg-white rounded-3xl shadow-2xl shadow-slate-200/50 border border-slate-200 overflow-hidden">
+          <div class="bg-slate-100 px-4 py-3 flex items-center gap-2 border-b border-slate-200">
+            <div class="w-3 h-3 rounded-full bg-red-400"></div>
+            <div class="w-3 h-3 rounded-full bg-amber-400"></div>
+            <div class="w-3 h-3 rounded-full bg-green-400"></div>
+            <div class="flex-1 mx-4">
+              <div class="bg-white rounded-lg px-4 py-1.5 text-sm text-slate-400 text-center">expertise-finder.app</div>
+            </div>
+          </div>
+          <div class="p-8 bg-gradient-to-br from-slate-50 to-white">
+            <div class="flex items-center gap-4 mb-6">
+              <div class="flex-1 bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl px-6 py-4 text-white">
+                <div class="text-sm opacity-80 mb-1">Search your network for expertise in...</div>
+                <div class="text-lg font-semibold">HIPAA compliance</div>
+              </div>
+              <div class="w-12 h-12 rounded-xl bg-slate-900 flex items-center justify-center">
+                <span data-lucide="search" class="w-5 h-5 text-white"></span>
+              </div>
+            </div>
+            <div class="space-y-3">
+              <div class="flex items-center gap-4 p-4 bg-white rounded-xl border border-slate-200">
+                <div class="w-12 h-12 rounded-full bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center text-amber-600 font-bold">JK</div>
+                <div class="flex-1">
+                  <div class="font-semibold text-slate-800">Jennifer Kim</div>
+                  <div class="text-sm text-slate-500">Healthcare Compliance Director • 12 years experience</div>
+                </div>
+                <div class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-sm font-medium">98% match</div>
+              </div>
+              <div class="flex items-center gap-4 p-4 bg-white rounded-xl border border-slate-200 opacity-60">
+                <div class="w-12 h-12 rounded-full bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center text-slate-500 font-bold">MR</div>
+                <div class="flex-1">
+                  <div class="font-semibold text-slate-800">Marcus Rodriguez</div>
+                  <div class="text-sm text-slate-500">Privacy Officer • 8 years experience</div>
+                </div>
+                <div class="px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-sm font-medium">85% match</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES SECTION -->
+  <section class="py-24 bg-white">
+    <div class="max-w-6xl mx-auto px-6">
+      <h2 id="features-title" class="text-4xl md:text-5xl font-bold text-center mb-16 text-gradient"></h2>
+      <div id="features-grid" class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <!-- Features will be injected here by JS -->
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS SECTION -->
+  <section id="how-it-works" class="py-24 bg-gradient-to-b from-slate-50 to-white">
+    <div class="max-w-4xl mx-auto px-6">
+      <h2 id="how-it-works-title" class="text-4xl md:text-5xl font-bold text-center mb-16 text-gradient"></h2>
+      <div id="steps-container" class="relative">
+        <!-- Steps will be injected here by JS -->
+      </div>
+    </div>
+  </section>
+
+  <!-- BOTTOM CTA SECTION -->
+  <section class="py-24 relative overflow-hidden">
+    <div class="absolute inset-0 hero-gradient opacity-10"></div>
+    <div class="absolute top-0 left-1/4 w-96 h-96 bg-gradient-to-br from-amber-400/20 to-orange-500/20 rounded-full blur-3xl"></div>
+    <div class="relative max-w-4xl mx-auto px-6 text-center">
+      <h2 id="bottom-cta-headline" class="text-4xl md:text-5xl font-bold text-slate-900 mb-6"></h2>
+      <p id="bottom-cta-subheadline" class="text-xl text-slate-600 mb-10"></p>
+      <a href="app.html" id="bottom-cta-button" class="inline-block px-10 py-5 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 text-white text-xl font-semibold hover:from-amber-600 hover:to-orange-600 transition-all shadow-xl shadow-orange-300/40 hover:shadow-orange-400/50 hover:-translate-y-1"></a>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="py-8 bg-slate-900 text-slate-400">
+    <div class="max-w-6xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-4">
+      <p id="footer-copyright" class="text-sm"></p>
+      <div id="footer-links" class="flex gap-6 text-sm">
+        <!-- Links will be injected here by JS -->
+      </div>
+    </div>
+  </footer>
+
+  <!-- CONTENT INJECTION SCRIPT -->
+  <script>
+    // Initialize Lucide icons
+    lucide.createIcons();
+
+    // Populate content from landingContent.js
+    document.addEventListener('DOMContentLoaded', () => {
+      const content = LANDING_CONTENT;
+
+      // Meta
+      document.getElementById('page-title').textContent = content.meta.title;
+      document.getElementById('page-description').setAttribute('content', content.meta.description);
+
+      // Nav
+      document.getElementById('nav-logo').textContent = content.nav.logo;
+      document.getElementById('nav-cta').textContent = content.nav.ctaButton;
+
+      // Hero
+      document.getElementById('hero-headline').textContent = content.hero.headline;
+      document.getElementById('hero-subheadline').textContent = content.hero.subheadline;
+      document.getElementById('hero-primary-cta').textContent = content.hero.primaryCta;
+      document.getElementById('hero-secondary-cta').textContent = content.hero.secondaryCta;
+
+      // Features
+      document.getElementById('features-title').textContent = content.features.sectionTitle;
+      const featuresGrid = document.getElementById('features-grid');
+      content.features.items.forEach((feature, index) => {
+        const card = document.createElement('div');
+        card.className = `p-6 rounded-2xl bg-gradient-to-br from-slate-50 to-white border border-slate-200 card-hover animate-fade-up animate-delay-${index + 1}`;
+        card.innerHTML = `
+          <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center mb-5">
+            <span data-lucide="${feature.icon}" class="w-7 h-7 text-amber-600"></span>
+          </div>
+          <h3 class="text-xl font-bold text-slate-800 mb-3">${feature.title}</h3>
+          <p class="text-slate-600 leading-relaxed">${feature.description}</p>
+        `;
+        featuresGrid.appendChild(card);
+      });
+
+      // How It Works
+      document.getElementById('how-it-works-title').textContent = content.howItWorks.sectionTitle;
+      const stepsContainer = document.getElementById('steps-container');
+      content.howItWorks.steps.forEach((step, index) => {
+        const isLast = index === content.howItWorks.steps.length - 1;
+        const stepEl = document.createElement('div');
+        stepEl.className = 'relative flex gap-6 pb-12';
+        stepEl.innerHTML = `
+          ${!isLast ? '<div class="absolute left-7 top-16 bottom-0 w-0.5 step-line"></div>' : ''}
+          <div class="flex-shrink-0 w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center text-white text-2xl font-bold shadow-lg shadow-orange-200">${step.number}</div>
+          <div class="pt-2">
+            <h3 class="text-2xl font-bold text-slate-800 mb-2">${step.title}</h3>
+            <p class="text-lg text-slate-600">${step.description}</p>
+          </div>
+        `;
+        stepsContainer.appendChild(stepEl);
+      });
+
+      // Bottom CTA
+      document.getElementById('bottom-cta-headline').textContent = content.bottomCta.headline;
+      document.getElementById('bottom-cta-subheadline').textContent = content.bottomCta.subheadline;
+      document.getElementById('bottom-cta-button').textContent = content.bottomCta.buttonText;
+
+      // Footer
+      document.getElementById('footer-copyright').textContent = content.footer.copyright;
+      const footerLinks = document.getElementById('footer-links');
+      content.footer.links.forEach(link => {
+        const a = document.createElement('a');
+        a.href = link.url;
+        a.textContent = link.text;
+        a.className = 'hover:text-white transition-colors';
+        footerLinks.appendChild(a);
+      });
+
+      // Re-initialize Lucide for dynamically added icons
+      lucide.createIcons();
+    });
+  </script>
+</body>
+</html>

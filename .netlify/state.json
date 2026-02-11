@@ -1,0 +1,20 @@
+{
+	"geolocation": {
+		"data": {
+			"city": "Ashburn",
+			"country": {
+				"code": "US",
+				"name": "United States"
+			},
+			"subdivision": {
+				"code": "VA",
+				"name": "Virginia"
+			},
+			"timezone": "America/New_York",
+			"latitude": 39.0469,
+			"longitude": -77.4903,
+			"postalCode": "20149"
+		},
+		"timestamp": 1770827279133
+	}
+}

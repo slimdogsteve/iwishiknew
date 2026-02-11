@@ -1,0 +1,1882 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>I Wish I Knew Someone Who...</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'DM Sans', system-ui, sans-serif; }
+    .modal-scroll::-webkit-scrollbar { width: 8px; }
+    .modal-scroll::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+    .modal-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    .modal-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useCallback, useEffect, useRef, useMemo } = React;
+
+    // ============================================
+    // CONFIG
+    // ============================================
+    const GOOGLE_CLIENT_ID = '697214265103-8l0lloceplcp7150jfa0eenq7jo483o1.apps.googleusercontent.com';
+    const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/contacts.readonly';
+    const ANTHROPIC_API_URL = '/.netlify/functions/anthropic-proxy';
+
+    // ============================================
+    // ICONS
+    // ============================================
+    const Icon = ({ name, size = 16, className = "" }) => {
+      const ref = useRef(null);
+      useEffect(() => {
+        if (ref.current) {
+          ref.current.innerHTML = '';
+          const icon = lucide.createElement(lucide.icons[name]);
+          icon.setAttribute('width', size);
+          icon.setAttribute('height', size);
+          if (className) icon.setAttribute('class', className);
+          ref.current.appendChild(icon);
+        }
+      }, [name, size, className]);
+      return <span ref={ref} className="inline-flex" />;
+    };
+
+    // ============================================
+    // UTILITIES
+    // ============================================
+    const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+    const buildGoogleAuthUrl = () => {
+      const redirectUri = window.location.origin + window.location.pathname;
+      const params = new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        redirect_uri: redirectUri,
+        response_type: 'token',
+        scope: GOOGLE_SCOPES,
+        include_granted_scopes: 'true',
+        prompt: 'consent'
+      });
+      return "https://accounts.google.com/o/oauth2/v2/auth?" + params.toString();
+    };
+
+    const parseTokenFromHash = (hash) => {
+      if (!hash || hash.length < 2) return null;
+      const params = new URLSearchParams(hash.substring(1));
+      return params.get('access_token');
+    };
+
+    const fetchGoogleContacts = async (accessToken) => {
+      const contacts = [];
+      let nextPageToken = null;
+      do {
+        const url = new URL('https://people.googleapis.com/v1/people/me/connections');
+        url.searchParams.set('personFields', 'names,emailAddresses,organizations');
+        url.searchParams.set('pageSize', '100');
+        if (nextPageToken) url.searchParams.set('pageToken', nextPageToken);
+        const response = await fetch(url.toString(), { headers: { 'Authorization': 'Bearer ' + accessToken } });
+        if (!response.ok) throw new Error('API error ' + response.status);
+        const data = await response.json();
+        if (data.connections) {
+          for (const person of data.connections) {
+            const name = person.names?.[0];
+            const email = person.emailAddresses?.[0]?.value;
+            const org = person.organizations?.[0];
+            if (name?.givenName || name?.familyName) {
+              contacts.push({ resourceName: person.resourceName, firstName: name.givenName || '', lastName: name.familyName || '', email: email || '', company: org?.name || '', position: org?.title || '' });
+            }
+          }
+        }
+        nextPageToken = data.nextPageToken;
+      } while (nextPageToken);
+      return contacts;
+    };
+
+    const fetchEmailsForContact = async (accessToken, contactEmail, maxResults = 20) => {
+      if (!contactEmail) return [];
+      const query = encodeURIComponent('from:' + contactEmail + ' OR to:' + contactEmail);
+      const listUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=' + query + '&maxResults=' + maxResults;
+      const listResponse = await fetch(listUrl, { headers: { 'Authorization': 'Bearer ' + accessToken } });
+      if (!listResponse.ok) throw new Error('Failed to fetch emails');
+      const listData = await listResponse.json();
+      if (!listData.messages?.length) return [];
+      const emails = [];
+      for (const msg of listData.messages.slice(0, 10)) {
+        const msgUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + msg.id + '?format=full';
+        const msgResponse = await fetch(msgUrl, { headers: { 'Authorization': 'Bearer ' + accessToken } });
+        if (msgResponse.ok) {
+          const msgData = await msgResponse.json();
+          const headers = msgData.payload?.headers || [];
+          const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+          let body = '';
+          const extractText = (part) => {
+            if (part.mimeType === 'text/plain' && part.body?.data) {
+              try { body += atob(part.body.data.replace(/-/g, '+').replace(/_/g, '/')) + '\n'; } catch(e) {}
+            }
+            if (part.parts) part.parts.forEach(extractText);
+          };
+          extractText(msgData.payload);
+          emails.push({ id: msg.id, from: getHeader('From'), to: getHeader('To'), subject: getHeader('Subject'), date: getHeader('Date'), snippet: msgData.snippet, body: body.slice(0, 2000) });
+        }
+      }
+      return emails;
+    };
+
+    const COMMON_NAMES = new Set(['james', 'john', 'robert', 'michael', 'william', 'david', 'mary', 'patricia', 'jennifer', 'linda', 'smith', 'johnson', 'williams', 'brown', 'jones', 'garcia', 'miller', 'davis']);
+
+    const calculateNameConfidence = (firstName, lastName, company) => {
+      const firstLower = (firstName || '').toLowerCase();
+      const lastLower = (lastName || '').toLowerCase();
+      let score = 100;
+      if (COMMON_NAMES.has(firstLower)) score -= 25;
+      if (COMMON_NAMES.has(lastLower)) score -= 25;
+      if (firstName?.length <= 3) score -= 10;
+      if (!company) score -= 20;
+      return { score: Math.max(0, Math.min(100, score)), confidence: score >= 70 ? 'high' : score >= 40 ? 'medium' : 'low' };
+    };
+
+    const inferSkillsFromTitle = (title, company) => {
+      const titleLower = (title || '').toLowerCase();
+      const skillMap = { 'engineer': ['Software Development'], 'developer': ['Programming'], 'product': ['Product Strategy'], 'marketing': ['Marketing'], 'sales': ['Sales'], 'ceo': ['Leadership'], 'cto': ['Technical Strategy'], 'director': ['Leadership'], 'manager': ['Management'] };
+      let skills = [];
+      for (const [keyword, associatedSkills] of Object.entries(skillMap)) {
+        if (titleLower.includes(keyword)) skills.push(...associatedSkills);
+      }
+      return { skills: [...new Set(skills)].slice(0, 5), domains: [], seniority: 'IC' };
+    };
+
+    const parseLinkedInCSV = (csvText) => {
+      const lines = csvText.split('\n');
+      if (lines.length < 2) return [];
+      let headerIndex = 0;
+      for (let i = 0; i < Math.min(5, lines.length); i++) {
+        if (lines[i].toLowerCase().includes('first name')) { headerIndex = i; break; }
+      }
+      const headers = lines[headerIndex].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''));
+      const contacts = [];
+      for (let i = headerIndex + 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        const values = [];
+        let current = '';
+        let inQuotes = false;
+        for (const char of lines[i]) {
+          if (char === '"') inQuotes = !inQuotes;
+          else if (char === ',' && !inQuotes) { values.push(current.trim()); current = ''; }
+          else current += char;
+        }
+        values.push(current.trim());
+        const contact = {};
+        headers.forEach((header, idx) => { contact[header] = values[idx] || ''; });
+        const firstName = contact['first name'] || contact['firstname'] || '';
+        const lastName = contact['last name'] || contact['lastname'] || '';
+        const company = contact['company'] || '';
+        const position = contact['position'] || contact['title'] || '';
+        const email = contact['email'] || '';
+        if (firstName || lastName) {
+          const inferred = inferSkillsFromTitle(position, company);
+          const nameConfidence = calculateNameConfidence(firstName, lastName, company);
+          contacts.push({ id: 'csv-' + i + '-' + Date.now(), firstName, lastName, name: (firstName + ' ' + lastName).trim(), company, position, email, education: '', personalNotes: '', tier: 2, inferred, enhanced: null, emailInsights: null, nameConfidence, source: 'linkedin' });
+        }
+      }
+      return contacts;
+    };
+
+    // ============================================
+    // DEDUPLICATION UTILITIES
+    // ============================================
+    const normalizeStr = (s) => (s || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+    
+    const similarityScore = (a, b) => {
+      if (!a || !b) return 0;
+      const na = normalizeStr(a);
+      const nb = normalizeStr(b);
+      if (na === nb) return 1;
+      if (na.includes(nb) || nb.includes(na)) return 0.8;
+      // Simple character overlap ratio
+      const setA = new Set(na.split(''));
+      const setB = new Set(nb.split(''));
+      const intersection = [...setA].filter(c => setB.has(c)).length;
+      const union = new Set([...setA, ...setB]).size;
+      return union > 0 ? intersection / union : 0;
+    };
+
+    const findDuplicates = (contacts) => {
+      const groups = [];
+      const used = new Set();
+      for (let i = 0; i < contacts.length; i++) {
+        if (used.has(i)) continue;
+        const dupes = [];
+        for (let j = i + 1; j < contacts.length; j++) {
+          if (used.has(j)) continue;
+          const a = contacts[i];
+          const b = contacts[j];
+          // Email match is definitive
+          const emailMatch = a.email && b.email && a.email.toLowerCase() === b.email.toLowerCase();
+          if (emailMatch) {
+            dupes.push({ index: j, contact: b, score: 1.0, reason: 'Same email' });
+            used.add(j);
+            continue;
+          }
+          // Name matching: require LAST NAME match or very high similarity
+          const lastA = normalizeStr(a.lastName || a.name?.split(' ').pop());
+          const lastB = normalizeStr(b.lastName || b.name?.split(' ').pop());
+          const firstA = normalizeStr(a.firstName || a.name?.split(' ')[0]);
+          const firstB = normalizeStr(b.firstName || b.name?.split(' ')[0]);
+          const lastNameMatch = lastA && lastB && lastA.length > 1 && (lastA === lastB);
+          const firstNameMatch = firstA && firstB && (firstA === firstB || firstA.startsWith(firstB) || firstB.startsWith(firstA));
+          // Must have matching last names AND similar first names
+          if (lastNameMatch && firstNameMatch) {
+            const companySim = similarityScore(a.company, b.company);
+            const score = 0.7 + (companySim * 0.3);
+            const reason = companySim > 0.5 ? 'Same name & similar company' : 'Same name';
+            dupes.push({ index: j, contact: b, score, reason });
+            used.add(j);
+          }
+        }
+        if (dupes.length > 0) {
+          used.add(i);
+          groups.push({ primary: contacts[i], duplicates: dupes.map(d => ({ ...d.contact, _matchReason: d.reason, _matchScore: d.score })) });
+        }
+      }
+      return groups;
+    };
+
+    const mergeContacts = (keeper, merging) => {
+      // Combine all skills
+      const keeperSkills = [...(keeper.enhanced?.expertise || []), ...(keeper.inferred?.skills || [])];
+      const mergingSkills = [...(merging.enhanced?.expertise || []), ...(merging.inferred?.skills || [])];
+      const allSkills = [...new Set([...keeperSkills, ...mergingSkills])];
+      
+      // Merge email insights expertise signals
+      const keeperSignals = keeper.emailInsights?.expertiseSignals || [];
+      const mergingSignals = merging.emailInsights?.expertiseSignals || [];
+      const allSignals = [...new Set([...keeperSignals, ...mergingSignals])];
+
+      const merged = { ...keeper };
+      // Use enhanced data from whichever has it, preferring keeper
+      if (!merged.enhanced && merging.enhanced) {
+        merged.enhanced = { ...merging.enhanced };
+      } else if (merged.enhanced) {
+        merged.enhanced = { ...merged.enhanced, expertise: allSkills };
+      }
+      // If keeper has no enhanced, put merged skills in inferred
+      if (!merged.enhanced) {
+        merged.inferred = { ...(merged.inferred || {}), skills: allSkills };
+      }
+      // Merge email insights
+      if (!merged.emailInsights && merging.emailInsights) {
+        merged.emailInsights = { ...merging.emailInsights, expertiseSignals: allSignals };
+      } else if (merged.emailInsights) {
+        merged.emailInsights = { ...merged.emailInsights, expertiseSignals: allSignals };
+      }
+      // Fill in missing fields
+      if (!merged.email && merging.email) merged.email = merging.email;
+      if (!merged.company && merging.company) merged.company = merging.company;
+      if (!merged.position && merging.position) merged.position = merging.position;
+      if (!merged.education && merging.education) merged.education = merging.education;
+      // Combine notes
+      if (merging.personalNotes && merging.personalNotes !== merged.personalNotes) {
+        merged.personalNotes = ((merged.personalNotes || '') + '\n' + merging.personalNotes).trim();
+      }
+      // Keep the better tier
+      merged.tier = Math.max(merged.tier || 1, merging.tier || 1);
+      return merged;
+    };
+
+    // ============================================
+    // LOCAL SEARCH PRE-FILTER (speeds up expert search)
+    // ============================================
+    const preFilterContacts = (contacts, query, maxResults = 30) => {
+      const queryLower = query.toLowerCase();
+      const queryWords = queryLower.split(/\s+/).filter(w => w.length > 2);
+      
+      const scored = contacts.map(c => {
+        let score = 0;
+        const allSkills = [...(c.enhanced?.expertise || []), ...(c.inferred?.skills || [])];
+        const allSignals = c.emailInsights?.expertiseSignals || [];
+        const searchable = [
+          ...allSkills, ...allSignals,
+          c.position || '', c.company || '', c.personalNotes || '',
+          c.enhanced?.summary || '',
+          ...(c.enhanced?.personalInterests || []),
+          ...(c.enhanced?.communityRoles || []),
+          ...(c.enhanced?.notableWork || [])
+        ].join(' ').toLowerCase();
+        
+        // Exact phrase match in skills (highest value)
+        if (allSkills.some(s => s.toLowerCase().includes(queryLower))) score += 10;
+        if (allSignals.some(s => s.toLowerCase().includes(queryLower))) score += 8;
+        // Word-level matches
+        for (const word of queryWords) {
+          if (searchable.includes(word)) score += 3;
+          // Partial match
+          if (allSkills.some(s => s.toLowerCase().includes(word))) score += 5;
+        }
+        return { contact: c, score };
+      });
+      
+      return scored
+        .filter(s => s.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, maxResults)
+        .map(s => s.contact);
+    };
+
+    // ============================================
+    // LOGIN SCREEN
+    // ============================================
+    function LoginScreen({ supabase }) {
+      const [isLoading, setIsLoading] = useState(false);
+      const [error, setError] = useState(null);
+
+      const handleGoogleLogin = async () => {
+        setIsLoading(true);
+        setError(null);
+        try {
+          const { error } = await supabase.auth.signInWithOAuth({
+            provider: 'google',
+            options: { redirectTo: window.location.origin + window.location.pathname }
+          });
+          if (error) throw error;
+        } catch (err) {
+          setError(err.message);
+          setIsLoading(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-amber-50/30 flex items-center justify-center p-4">
+          <div className="max-w-md w-full">
+            <div className="text-center mb-8">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-orange-200 mx-auto mb-4">
+                <Icon name="Users" size={32} className="text-white" />
+              </div>
+              <h1 className="text-3xl font-bold text-slate-800 mb-2">I Wish I Knew Someone Who...</h1>
+              <p className="text-slate-600">Discover who in your network has the expertise you need</p>
+            </div>
+            <div className="bg-white rounded-2xl shadow-xl p-8 border border-slate-200">
+              <h2 className="text-xl font-semibold text-slate-800 mb-6 text-center">Sign in to continue</h2>
+              {error && <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">{error}</div>}
+              <button onClick={handleGoogleLogin} disabled={isLoading} className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-all disabled:opacity-50">
+                <svg className="w-5 h-5" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                <span className="font-medium text-slate-700">{isLoading ? 'Signing in...' : 'Continue with Google'}</span>
+              </button>
+              <p className="mt-6 text-xs text-slate-500 text-center">Your contacts are stored securely and only accessible by you.</p>
+            </div>
+            <div className="mt-8 text-center">
+              <h3 className="font-semibold text-slate-700 mb-3">What you can do:</h3>
+              <div className="grid grid-cols-1 gap-3 text-sm text-slate-600">
+                <div className="flex items-center gap-2 justify-center"><Icon name="Upload" size={16} className="text-amber-500" /><span>Import LinkedIn connections</span></div>
+                <div className="flex items-center gap-2 justify-center"><Icon name="Mail" size={16} className="text-amber-500" /><span>Connect Gmail for insights</span></div>
+                <div className="flex items-center gap-2 justify-center"><Icon name="Sparkles" size={16} className="text-amber-500" /><span>AI-powered enhancement</span></div>
+                <div className="flex items-center gap-2 justify-center"><Icon name="Search" size={16} className="text-amber-500" /><span>Find experts in your network</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // NOTIFICATION PANEL
+    // ============================================
+    function NotificationPanel({ notifications, onMarkRead, onClose }) {
+      if (notifications.length === 0) {
+        return (
+          <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-2xl border border-slate-200 z-50 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-slate-800">Notifications</h3>
+              <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded"><Icon name="X" size={14} className="text-slate-400" /></button>
+            </div>
+            <p className="text-sm text-slate-500 text-center py-4">No notifications</p>
+          </div>
+        );
+      }
+      return (
+        <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-xl shadow-2xl border border-slate-200 z-50 max-h-96 flex flex-col">
+          <div className="flex items-center justify-between p-4 border-b border-slate-100">
+            <h3 className="font-semibold text-slate-800">Notifications ({notifications.length})</h3>
+            <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded"><Icon name="X" size={14} className="text-slate-400" /></button>
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {notifications.map(n => (
+              <div key={n.id} className="p-4 border-b border-slate-50 hover:bg-slate-50">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-800">{n.sender_name || n.sender_email || 'Someone'}</p>
+                    <p className="text-sm text-slate-600 mt-1">{n.message}</p>
+                    <p className="text-xs text-slate-400 mt-1">{new Date(n.created_at).toLocaleDateString()} {new Date(n.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                  </div>
+                  <button onClick={() => onMarkRead(n.id)} className="flex-shrink-0 p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" title="Dismiss">
+                    <Icon name="Check" size={14} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // DEDUPE MODAL
+    // ============================================
+    function DedupeModal({ groups, onMerge, onClose }) {
+      const [selectedKeepers, setSelectedKeepers] = useState(() => {
+        const m = {};
+        groups.forEach((g, i) => { m[i] = 'primary'; });
+        return m;
+      });
+      const [includedGroups, setIncludedGroups] = useState(() => {
+        const m = {};
+        groups.forEach((g, i) => { m[i] = true; });
+        return m;
+      });
+
+      const toggleGroup = (gi) => {
+        setIncludedGroups(prev => ({ ...prev, [gi]: !prev[gi] }));
+      };
+
+      const includedCount = Object.values(includedGroups).filter(Boolean).length;
+
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full flex flex-col overflow-hidden" style={{ maxHeight: 'calc(100vh - 64px)' }} onClick={e => e.stopPropagation()}>
+            <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-amber-50/50">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800">Duplicate Contacts Found</h2>
+                  <p className="text-sm text-slate-500 mt-1">{groups.length} potential duplicate group{groups.length !== 1 ? 's' : ''} &bull; {includedCount} selected for merge</p>
+                </div>
+                <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg"><Icon name="X" size={20} className="text-slate-400" /></button>
+              </div>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1 modal-scroll space-y-6">
+              {groups.map((group, gi) => {
+                const isIncluded = includedGroups[gi];
+                return (
+                  <div key={gi} className={"rounded-xl border overflow-hidden transition-opacity " + (isIncluded ? 'border-slate-200' : 'border-slate-100 opacity-50')}>
+                    <div className="bg-slate-50 px-4 py-2 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <input type="checkbox" checked={isIncluded} onChange={() => toggleGroup(gi)} className="w-4 h-4 rounded text-amber-500 cursor-pointer" />
+                        <span className="text-sm font-medium text-slate-600">Group {gi + 1}</span>
+                        {group.duplicates[0]?._matchReason && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">{group.duplicates[0]._matchReason}</span>
+                        )}
+                      </div>
+                      {isIncluded && <span className="text-xs text-slate-400">Select record to keep:</span>}
+                    </div>
+                    {isIncluded && (
+                      <div className="divide-y divide-slate-100">
+                        {[group.primary, ...group.duplicates].map((contact, ci) => {
+                          const key = ci === 0 ? 'primary' : 'dup-' + ci;
+                          const isSelected = selectedKeepers[gi] === key;
+                          return (
+                            <label key={ci} className={"flex items-center gap-3 p-4 cursor-pointer hover:bg-slate-50 " + (isSelected ? 'bg-amber-50' : '')}>
+                              <input type="radio" name={'group-' + gi} checked={isSelected} onChange={() => setSelectedKeepers(prev => ({...prev, [gi]: key}))} className="w-4 h-4 text-amber-500" />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-slate-800">{contact.name}</span>
+                                  {contact.tier === 3 && <span className="px-1.5 py-0.5 rounded text-xs bg-emerald-100 text-emerald-700">Enhanced</span>}
+                                  <span className="px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-500">{contact.source || 'unknown'}</span>
+                                </div>
+                                <p className="text-sm text-slate-600 truncate">{contact.position} {contact.company ? 'at ' + contact.company : ''}</p>
+                                {contact.email && <p className="text-xs text-slate-400">{contact.email}</p>}
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {[...(contact.enhanced?.expertise || contact.inferred?.skills || [])].slice(0, 4).map((s, si) => (
+                                    <span key={si} className="px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-600">{s}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="p-6 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
+              <p className="text-sm text-slate-500">Skills from all duplicates will be merged into the kept record.</p>
+              <div className="flex gap-3">
+                <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+                <button onClick={() => { const filtered = groups.filter((_, i) => includedGroups[i]); const filteredKeepers = {}; let fi = 0; groups.forEach((_, i) => { if (includedGroups[i]) { filteredKeepers[fi] = selectedKeepers[i]; fi++; } }); onMerge(filtered, filteredKeepers); }} disabled={includedCount === 0} className="px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600 shadow-sm disabled:opacity-40">
+                  Merge {includedCount} Group{includedCount !== 1 ? 's' : ''}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // SEND NOTE MODAL
+    // ============================================
+    function SendNoteModal({ contact, platformUserId, onSend, onInviteInstead, onClose }) {
+      const [message, setMessage] = useState('');
+      const [sending, setSending] = useState(false);
+
+      const handleSend = async () => {
+        if (!message.trim()) return;
+        setSending(true);
+        await onSend(platformUserId, message.trim());
+        setSending(false);
+        onClose();
+      };
+
+      if (!platformUserId) {
+        return (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+              <div className="text-center mb-4">
+                <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center mx-auto mb-3">
+                  <Icon name="UserPlus" size={24} className="text-slate-400" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-800">{contact.name} isn't on the platform yet</h3>
+                <p className="text-sm text-slate-500 mt-2">You can only send notes to contacts who have an account. Would you like to invite them?</p>
+              </div>
+              <div className="flex gap-3">
+                <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+                <button onClick={() => { onClose(); onInviteInstead(contact); }} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600">Invite Instead</button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Send a Note to {contact.name}</h3>
+            <p className="text-sm text-slate-500 mb-4">This will appear in their notifications.</p>
+            <textarea value={message} onChange={e => setMessage(e.target.value)} placeholder="Write your note..." className="w-full h-32 p-3 rounded-xl border border-slate-200 bg-slate-50 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/20" autoFocus />
+            <div className="flex gap-3 mt-4">
+              <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+              <button onClick={handleSend} disabled={!message.trim() || sending} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600 disabled:opacity-50 flex items-center justify-center gap-2">
+                {sending ? <Icon name="Loader2" size={14} className="animate-spin" /> : <Icon name="Send" size={14} />} Send
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // INVITE MODAL
+    // ============================================
+    function InviteModal({ contact, inviteLink, onCreateInvite, onClose }) {
+      const [copied, setCopied] = useState(false);
+      const [creating, setCreating] = useState(false);
+      const [link, setLink] = useState(inviteLink);
+
+      const handleCreate = async () => {
+        setCreating(true);
+        const result = await onCreateInvite(contact);
+        if (result) setLink(result);
+        setCreating(false);
+      };
+
+      const copyLink = () => {
+        if (link) {
+          navigator.clipboard.writeText(link);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Invite {contact.name}</h3>
+            <p className="text-sm text-slate-500 mb-4">Generate an invite link they can use to join the platform and create an account.</p>
+            {!link ? (
+              <button onClick={handleCreate} disabled={creating} className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-medium hover:from-amber-600 hover:to-orange-600 disabled:opacity-50 flex items-center justify-center gap-2">
+                {creating ? <Icon name="Loader2" size={16} className="animate-spin" /> : <Icon name="Link" size={16} />} Generate Invite Link
+              </button>
+            ) : (
+              <div>
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-slate-50 border border-slate-200">
+                  <input type="text" value={link} readOnly className="flex-1 bg-transparent text-sm text-slate-700 outline-none truncate" />
+                  <button onClick={copyLink} className={"px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 " + (copied ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700 hover:bg-amber-200')}>
+                    <Icon name={copied ? "Check" : "Copy"} size={14} /> {copied ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+                <p className="text-xs text-slate-400 mt-2">Share this link with {contact.name} via email, text, or any messaging platform.</p>
+              </div>
+            )}
+            <button onClick={onClose} className="w-full mt-4 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Close</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // MANUAL MERGE MODAL
+    // ============================================
+    function ManualMergeModal({ sourceContact, allContacts, onMerge, onClose }) {
+      const [searchTerm, setSearchTerm] = useState('');
+      const [selectedTarget, setSelectedTarget] = useState(null);
+      const [keepSource, setKeepSource] = useState(true);
+
+      const candidates = allContacts.filter(c => {
+        if (c.id === sourceContact.id) return false;
+        if (!searchTerm) return false;
+        const q = searchTerm.toLowerCase();
+        return c.name.toLowerCase().includes(q) || (c.email || '').toLowerCase().includes(q) || (c.company || '').toLowerCase().includes(q);
+      }).slice(0, 10);
+
+      const handleMerge = () => {
+        if (!selectedTarget) return;
+        const keeper = keepSource ? sourceContact : selectedTarget;
+        const merging = keepSource ? selectedTarget : sourceContact;
+        onMerge(keeper, merging);
+        onClose();
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Merge {sourceContact.name} with...</h3>
+            <p className="text-sm text-slate-500 mb-4">Search for the duplicate contact to merge with.</p>
+            <input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search by name, email, or company..." className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 mb-3" autoFocus />
+            {candidates.length > 0 && (
+              <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl mb-4 divide-y divide-slate-100">
+                {candidates.map(c => (
+                  <label key={c.id} className={"flex items-center gap-3 p-3 cursor-pointer hover:bg-slate-50 " + (selectedTarget?.id === c.id ? 'bg-amber-50' : '')}>
+                    <input type="radio" name="merge-target" checked={selectedTarget?.id === c.id} onChange={() => setSelectedTarget(c)} className="w-4 h-4 text-amber-500" />
+                    <div className="flex-1 min-w-0">
+                      <span className="font-medium text-slate-800 text-sm">{c.name}</span>
+                      <p className="text-xs text-slate-500 truncate">{c.position} {c.company ? 'at ' + c.company : ''}{c.email ? ' \u2022 ' + c.email : ''}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
+            {searchTerm && candidates.length === 0 && (
+              <p className="text-sm text-slate-400 text-center py-3 mb-4">No matches found</p>
+            )}
+            {selectedTarget && (
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 mb-4">
+                <p className="text-sm font-medium text-slate-700 mb-2">Which record do you want to keep?</p>
+                <div className="space-y-2">
+                  <label className={"flex items-center gap-2 p-2 rounded-lg cursor-pointer " + (keepSource ? 'bg-amber-50 border border-amber-200' : 'hover:bg-slate-100')}>
+                    <input type="radio" name="keep" checked={keepSource} onChange={() => setKeepSource(true)} className="w-4 h-4 text-amber-500" />
+                    <span className="text-sm text-slate-700">{sourceContact.name} <span className="text-slate-400">({sourceContact.source || 'unknown'})</span></span>
+                  </label>
+                  <label className={"flex items-center gap-2 p-2 rounded-lg cursor-pointer " + (!keepSource ? 'bg-amber-50 border border-amber-200' : 'hover:bg-slate-100')}>
+                    <input type="radio" name="keep" checked={!keepSource} onChange={() => setKeepSource(false)} className="w-4 h-4 text-amber-500" />
+                    <span className="text-sm text-slate-700">{selectedTarget.name} <span className="text-slate-400">({selectedTarget.source || 'unknown'})</span></span>
+                  </label>
+                </div>
+                <p className="text-xs text-slate-400 mt-2">Skills from both records will be combined.</p>
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+              <button onClick={handleMerge} disabled={!selectedTarget} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-purple-500 to-purple-600 text-white text-sm font-medium hover:from-purple-600 hover:to-purple-700 disabled:opacity-40 flex items-center justify-center gap-2">
+                <Icon name="GitMerge" size={14} /> Merge
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // MAIN APP: EXPERTISE FINDER
+    // ============================================
+    function ExpertiseFinder({ supabase, user, onLogout }) {
+      // Existing state
+      const [contacts, setContacts] = useState([]);
+      const [selectedContact, setSelectedContact] = useState(null);
+      const [searchQuery, setSearchQuery] = useState('');
+      const [expertiseQuery, setExpertiseQuery] = useState('');
+      const [isEnhancing, setIsEnhancing] = useState(false);
+      const [isSearchingExperts, setIsSearchingExperts] = useState(false);
+      const [isAnalyzingEmail, setIsAnalyzingEmail] = useState(false);
+      const [expertResults, setExpertResults] = useState(null);
+      const [activeTab, setActiveTab] = useState('profile');
+      const [emailContent, setEmailContent] = useState('');
+      const [storageStatus, setStorageStatus] = useState('');
+      const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+      const [editingNotes, setEditingNotes] = useState(false);
+      const [tempNotes, setTempNotes] = useState('');
+      const [isLoading, setIsLoading] = useState(true);
+      const [isSaving, setIsSaving] = useState(false);
+      const [selectedIds, setSelectedIds] = useState(new Set());
+      const [sortOrder, setSortOrder] = useState('alpha-asc');
+      const [bulkProgress, setBulkProgress] = useState(null);
+      const [viewMode, setViewMode] = useState('grid');
+      const [googleAccessToken, setGoogleAccessToken] = useState(null);
+      const [isGoogleConnected, setIsGoogleConnected] = useState(false);
+      const [isImportingContacts, setIsImportingContacts] = useState(false);
+      const [isFetchingEmails, setIsFetchingEmails] = useState(false);
+      const [googleError, setGoogleError] = useState(null);
+
+      // New state for features 1-9
+      const [editingEmail, setEditingEmail] = useState(false);
+      const [tempEmail, setTempEmail] = useState('');
+      const [emailError, setEmailError] = useState('');
+      const [newSkillInput, setNewSkillInput] = useState('');
+      const [notifications, setNotifications] = useState([]);
+      const [showNotifications, setShowNotifications] = useState(false);
+      const [sendNoteContact, setSendNoteContact] = useState(null);
+      const [sendNotePlatformUserId, setSendNotePlatformUserId] = useState(null);
+      const [inviteContact, setInviteContact] = useState(null);
+      const [inviteLink, setInviteLink] = useState(null);
+      const [showDedupeModal, setShowDedupeModal] = useState(false);
+      const [duplicateGroups, setDuplicateGroups] = useState([]);
+      const [platformUserCache, setPlatformUserCache] = useState({});
+      const [manualMergeContact, setManualMergeContact] = useState(null);
+
+      // Load contacts
+      useEffect(() => {
+        const loadContacts = async () => {
+          setIsLoading(true);
+          try {
+            const { data, error } = await supabase.from('contacts').select('contact_data').eq('user_id', user.id).single();
+            if (error && error.code !== 'PGRST116') console.error('Load error:', error);
+            if (data?.contact_data) {
+              setContacts(data.contact_data);
+              setStorageStatus('Contacts loaded');
+              setTimeout(() => setStorageStatus(''), 2000);
+            }
+          } catch (err) { console.error('Failed to load:', err); }
+          finally { setIsLoading(false); }
+        };
+        loadContacts();
+      }, [user.id]);
+
+      // Ensure user profile exists
+      useEffect(() => {
+        const ensureProfile = async () => {
+          try {
+            const { data } = await supabase.from('user_profiles').select('id').eq('user_id', user.id).single();
+            if (!data) {
+              await supabase.from('user_profiles').insert({
+                user_id: user.id,
+                email: user.email,
+                display_name: user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0]
+              });
+            }
+          } catch (err) { /* profile may already exist from trigger */ }
+        };
+        ensureProfile();
+      }, [user.id]);
+
+      // Load notifications
+      useEffect(() => {
+        const loadNotifications = async () => {
+          try {
+            const { data } = await supabase.from('notifications').select('*').eq('recipient_id', user.id).eq('read', false).order('created_at', { ascending: false });
+            if (data) setNotifications(data);
+          } catch (err) { /* notifications table may not exist yet */ }
+        };
+        loadNotifications();
+        // Poll every 30 seconds
+        const interval = setInterval(loadNotifications, 30000);
+        return () => clearInterval(interval);
+      }, [user.id]);
+
+      // Parse Google token from URL hash
+      useEffect(() => {
+        const hash = window.location.hash;
+        if (hash.includes('access_token=')) {
+          const token = parseTokenFromHash(hash);
+          if (token) {
+            setGoogleAccessToken(token);
+            setIsGoogleConnected(true);
+            setStorageStatus('Gmail connected!');
+            window.history.replaceState(null, '', window.location.pathname);
+            setTimeout(() => setStorageStatus(''), 3000);
+          }
+        }
+      }, []);
+
+      // Save to Supabase
+      const saveToSupabase = async (contactsToSave) => {
+        setIsSaving(true);
+        try {
+          const { error } = await supabase.from('contacts').upsert({ user_id: user.id, contact_data: contactsToSave, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
+          if (error) throw error;
+          setHasUnsavedChanges(false);
+          setStorageStatus('Saved to cloud!');
+          setTimeout(() => setStorageStatus(''), 2000);
+          return true;
+        } catch (err) {
+          setStorageStatus('Save failed: ' + err.message);
+          setTimeout(() => setStorageStatus(''), 5000);
+          return false;
+        } finally { setIsSaving(false); }
+      };
+
+      const handleSave = () => saveToSupabase(contacts);
+
+      // File upload (LinkedIn CSV)
+      const handleFileUpload = (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          const parsed = parseLinkedInCSV(e.target.result);
+          if (parsed.length > 0) {
+            const merged = [...contacts, ...parsed];
+            setContacts(merged);
+            await saveToSupabase(merged);
+            setStorageStatus('Imported ' + parsed.length + ' contacts');
+            setTimeout(() => setStorageStatus(''), 3000);
+          }
+        };
+        reader.readAsText(file);
+      };
+
+      // Gmail
+      const connectGmail = () => { window.location.href = buildGoogleAuthUrl(); };
+      const disconnectGmail = () => { setGoogleAccessToken(null); setIsGoogleConnected(false); };
+
+      const importGoogleContacts = async () => {
+        if (!googleAccessToken) return;
+        setIsImportingContacts(true);
+        setStorageStatus('Fetching contacts from Gmail...');
+        try {
+          const googleContacts = await fetchGoogleContacts(googleAccessToken);
+          const existingEmails = new Set(contacts.map(c => c.email?.toLowerCase()).filter(Boolean));
+          let newCount = 0;
+          const mergedContacts = [...contacts];
+          for (const gc of googleContacts) {
+            const emailLower = gc.email?.toLowerCase();
+            if (!emailLower || !existingEmails.has(emailLower)) {
+              const inferred = inferSkillsFromTitle(gc.position, gc.company);
+              const nameConfidence = calculateNameConfidence(gc.firstName, gc.lastName, gc.company);
+              mergedContacts.push({ id: 'google-' + gc.resourceName + '-' + Date.now() + '-' + newCount, firstName: gc.firstName, lastName: gc.lastName, name: (gc.firstName + ' ' + gc.lastName).trim(), company: gc.company, position: gc.position, email: gc.email, education: '', personalNotes: '', tier: 2, inferred, enhanced: null, emailInsights: null, nameConfidence, source: 'gmail' });
+              newCount++;
+              existingEmails.add(emailLower);
+            }
+          }
+          setContacts(mergedContacts);
+          await saveToSupabase(mergedContacts);
+          setStorageStatus('Imported ' + newCount + ' new contacts');
+          setTimeout(() => setStorageStatus(''), 4000);
+        } catch (error) {
+          setGoogleError('Failed: ' + error.message);
+          setTimeout(() => setGoogleError(null), 5000);
+        } finally { setIsImportingContacts(false); }
+      };
+
+      // Email fetch and analysis
+      const fetchAndAnalyzeEmails = async (contact) => {
+        if (!googleAccessToken) { setStorageStatus('Please connect Gmail first'); setTimeout(() => setStorageStatus(''), 3000); return; }
+        if (!contact.email) { setStorageStatus('No email address'); setTimeout(() => setStorageStatus(''), 3000); return; }
+        setIsFetchingEmails(true);
+        try {
+          const emails = await fetchEmailsForContact(googleAccessToken, contact.email);
+          if (emails.length === 0) { setStorageStatus('No emails found'); }
+          else {
+            const emailText = emails.map(e => 'From: ' + e.from + '\nSubject: ' + e.subject + '\n\n' + (e.body || e.snippet)).join('\n\n---\n\n');
+            setEmailContent(emailText);
+            setActiveTab('email');
+            setStorageStatus('Found ' + emails.length + ' emails');
+          }
+          setTimeout(() => setStorageStatus(''), 3000);
+        } catch (error) {
+          setGoogleError('Failed: ' + error.message);
+          setTimeout(() => setGoogleError(null), 5000);
+        } finally { setIsFetchingEmails(false); }
+      };
+
+      // Enhance profile
+      const enhanceProfile = async (contact) => {
+        setIsEnhancing(true);
+        try {
+          const response = await fetch(ANTHROPIC_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 2500,
+              tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+              messages: [{ role: 'user', content: 'Use web_search to find information about ' + contact.name + ' who works at ' + contact.company + ' as ' + contact.position + '. Search for their LinkedIn profile, articles, news mentions. After searching, respond with ONLY this JSON: { "summary": "2-3 sentence bio", "expertise": ["skill1", "skill2"], "experience": [], "education": null, "notableWork": [], "personalInterests": [], "communityRoles": [], "confidence": "high/medium/low", "disambiguationNotes": "" }' }]
+            })
+          });
+          const data = await response.json();
+          if (data.error) { setStorageStatus('API error'); setTimeout(() => setStorageStatus(''), 5000); return; }
+          const textContent = data.content?.find(c => c.type === 'text')?.text || '';
+          const jsonMatch = textContent.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const enhanced = JSON.parse(jsonMatch[0]);
+            const hasMeaningfulData = enhanced.summary?.trim().length > 0 || enhanced.expertise?.length > 0;
+            if (!hasMeaningfulData) enhanced.noResults = true;
+            const newTier = hasMeaningfulData ? 3 : 2;
+            const updatedContacts = contacts.map(c => c.id === contact.id ? { ...c, tier: newTier, enhanced } : c);
+            setContacts(updatedContacts);
+            if (selectedContact?.id === contact.id) setSelectedContact(prev => ({ ...prev, tier: newTier, enhanced }));
+            await saveToSupabase(updatedContacts);
+            setStorageStatus(hasMeaningfulData ? 'Profile enhanced & saved!' : 'No info found');
+          }
+          setTimeout(() => setStorageStatus(''), 3000);
+        } catch (error) {
+          setStorageStatus('Failed: ' + error.message);
+          setTimeout(() => setStorageStatus(''), 5000);
+        } finally { setIsEnhancing(false); }
+      };
+
+      // Analyze email content
+      const analyzeEmailContent = async (contact) => {
+        if (!emailContent.trim()) { setStorageStatus('Please fetch or paste email content'); setTimeout(() => setStorageStatus(''), 3000); return; }
+        setIsAnalyzingEmail(true);
+        try {
+          const response = await fetch(ANTHROPIC_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 1000,
+              messages: [{ role: 'user', content: 'Analyze these email exchanges between ME (the user, ' + user.email + ') and my CONTACT named ' + contact.name + '.\n\nIMPORTANT: I want to learn about the CONTACT (' + contact.name + '), NOT about me. Only extract information that describes the CONTACT\'s skills, expertise, job, interests, and background. Do NOT attribute my skills or activities to the contact.\n\nEmails:\n' + emailContent + '\n\nReturn JSON only with information ABOUT THE CONTACT (' + contact.name + '):\n{ "expertiseSignals": ["list skills/expertise/job role OF THE CONTACT only"], "projectsMentioned": [], "problemsSolved": [], "communicationStyle": "", "relationshipStrength": "strong/moderate/weak", "keyInsights": "brief summary of who the CONTACT is and what they do" }' }]
+            })
+          });
+          const data = await response.json();
+          const textContent = data.content?.find(c => c.type === 'text')?.text || '';
+          const jsonMatch = textContent.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const insights = JSON.parse(jsonMatch[0]);
+            const updatedContacts = contacts.map(c => c.id === contact.id ? { ...c, emailInsights: insights } : c);
+            setContacts(updatedContacts);
+            if (selectedContact?.id === contact.id) setSelectedContact(prev => ({ ...prev, emailInsights: insights }));
+            await saveToSupabase(updatedContacts);
+            setStorageStatus('Email insights saved!');
+          }
+          setTimeout(() => setStorageStatus(''), 3000);
+        } catch (error) {
+          setStorageStatus('Failed: ' + error.message);
+          setTimeout(() => setStorageStatus(''), 5000);
+        } finally { setIsAnalyzingEmail(false); }
+      };
+
+      // Selection
+      const toggleSelect = (contactId, e) => {
+        e.stopPropagation();
+        setSelectedIds(prev => {
+          const newSet = new Set(prev);
+          if (newSet.has(contactId)) newSet.delete(contactId);
+          else newSet.add(contactId);
+          return newSet;
+        });
+      };
+      const selectAll = () => setSelectedIds(new Set(filteredContacts.map(c => c.id)));
+      const deselectAll = () => setSelectedIds(new Set());
+
+      // Bulk enhance
+      const enhanceSelectedContacts = async () => {
+        const selectedContacts = contacts.filter(c => selectedIds.has(c.id));
+        if (selectedContacts.length === 0) return;
+        setBulkProgress({ current: 0, total: selectedContacts.length, action: 'Enhancing' });
+        const updates = new Map();
+        for (let i = 0; i < selectedContacts.length; i++) {
+          const contact = selectedContacts[i];
+          setBulkProgress({ current: i + 1, total: selectedContacts.length, action: 'Enhancing' });
+          try {
+            const response = await fetch(ANTHROPIC_API_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model: 'claude-sonnet-4-20250514',
+                max_tokens: 2500,
+                tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+                messages: [{ role: 'user', content: 'Use web_search to find information about ' + contact.name + ' who works at ' + contact.company + ' as ' + contact.position + '. Return ONLY JSON: { "summary": "", "expertise": [], "experience": [], "education": null, "notableWork": [], "personalInterests": [], "communityRoles": [], "confidence": "", "disambiguationNotes": "" }' }]
+              })
+            });
+            const data = await response.json();
+            if (!data.error) {
+              const textContent = data.content?.find(c => c.type === 'text')?.text || '';
+              const jsonMatch = textContent.match(/\{[\s\S]*\}/);
+              if (jsonMatch) {
+                const enhanced = JSON.parse(jsonMatch[0]);
+                const hasMeaningfulData = enhanced.summary?.trim().length > 0 || enhanced.expertise?.length > 0;
+                if (!hasMeaningfulData) enhanced.noResults = true;
+                updates.set(contact.id, { tier: hasMeaningfulData ? 3 : 2, enhanced });
+              }
+            }
+          } catch (error) { console.error('Failed to enhance ' + contact.name, error); }
+          if (i < selectedContacts.length - 1) await new Promise(r => setTimeout(r, 500));
+        }
+        if (updates.size > 0) {
+          const updatedContacts = contacts.map(c => updates.has(c.id) ? { ...c, ...updates.get(c.id) } : c);
+          setContacts(updatedContacts);
+          await saveToSupabase(updatedContacts);
+        }
+        setBulkProgress(null);
+        setStorageStatus('Enhanced & saved ' + updates.size + ' of ' + selectedContacts.length + ' contacts');
+        setTimeout(() => setStorageStatus(''), 3000);
+      };
+
+      // Bulk analyze emails
+      const analyzeEmailsForSelected = async () => {
+        if (!googleAccessToken) { setStorageStatus('Please connect Gmail first'); setTimeout(() => setStorageStatus(''), 3000); return; }
+        const selectedContacts = contacts.filter(c => selectedIds.has(c.id) && c.email);
+        if (selectedContacts.length === 0) { setStorageStatus('No selected contacts have email'); setTimeout(() => setStorageStatus(''), 3000); return; }
+        setBulkProgress({ current: 0, total: selectedContacts.length, action: 'Analyzing emails for' });
+        const updates = new Map();
+        for (let i = 0; i < selectedContacts.length; i++) {
+          const contact = selectedContacts[i];
+          setBulkProgress({ current: i + 1, total: selectedContacts.length, action: 'Analyzing emails for' });
+          try {
+            const emails = await fetchEmailsForContact(googleAccessToken, contact.email);
+            if (emails.length === 0) continue;
+            const emailText = emails.map(e => 'From: ' + e.from + '\nSubject: ' + e.subject + '\n\n' + (e.body || e.snippet)).join('\n\n---\n\n');
+            const response = await fetch(ANTHROPIC_API_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model: 'claude-sonnet-4-20250514',
+                max_tokens: 1000,
+                messages: [{ role: 'user', content: 'Analyze these email exchanges between ME (the user, ' + user.email + ') and my CONTACT named ' + contact.name + '.\n\nIMPORTANT: I want to learn about the CONTACT (' + contact.name + '), NOT about me.\n\nEmails:\n' + emailText + '\n\nReturn JSON only:\n{ "expertiseSignals": [], "projectsMentioned": [], "problemsSolved": [], "communicationStyle": "", "relationshipStrength": "", "keyInsights": "" }' }]
+              })
+            });
+            const data = await response.json();
+            if (!data.error) {
+              const textContent = data.content?.find(c => c.type === 'text')?.text || '';
+              const jsonMatch = textContent.match(/\{[\s\S]*\}/);
+              if (jsonMatch) updates.set(contact.id, JSON.parse(jsonMatch[0]));
+            }
+          } catch (error) { console.error('Failed for ' + contact.name, error); }
+          if (i < selectedContacts.length - 1) await new Promise(r => setTimeout(r, 500));
+        }
+        if (updates.size > 0) {
+          const updatedContacts = contacts.map(c => updates.has(c.id) ? { ...c, emailInsights: updates.get(c.id) } : c);
+          setContacts(updatedContacts);
+          await saveToSupabase(updatedContacts);
+        }
+        setBulkProgress(null);
+        setStorageStatus('Analyzed & saved emails for ' + updates.size + ' contacts');
+        setTimeout(() => setStorageStatus(''), 3000);
+      };
+
+      // Personal notes
+      const savePersonalNotes = async (contact) => {
+        const updatedContacts = contacts.map(c => c.id === contact.id ? { ...c, personalNotes: tempNotes } : c);
+        setContacts(updatedContacts);
+        if (selectedContact?.id === contact.id) setSelectedContact(prev => ({ ...prev, personalNotes: tempNotes }));
+        setEditingNotes(false);
+        await saveToSupabase(updatedContacts);
+        setStorageStatus('Notes saved!');
+        setTimeout(() => setStorageStatus(''), 2000);
+      };
+
+      // ====== NEW FEATURE: Save Email ======
+      const saveContactEmail = async (contact) => {
+        if (tempEmail && !isValidEmail(tempEmail)) {
+          setEmailError('Please enter a valid email address');
+          return;
+        }
+        setEmailError('');
+        const updatedContacts = contacts.map(c => c.id === contact.id ? { ...c, email: tempEmail } : c);
+        setContacts(updatedContacts);
+        if (selectedContact?.id === contact.id) setSelectedContact(prev => ({ ...prev, email: tempEmail }));
+        setEditingEmail(false);
+        await saveToSupabase(updatedContacts);
+        setStorageStatus('Email saved!');
+        setTimeout(() => setStorageStatus(''), 2000);
+      };
+
+      // ====== NEW FEATURE: Add Skill ======
+      const addSkillToContact = async (contact, skill) => {
+        if (!skill.trim()) return;
+        const currentSkills = contact.enhanced?.expertise || contact.inferred?.skills || [];
+        if (currentSkills.some(s => s.toLowerCase() === skill.toLowerCase())) {
+          setStorageStatus('Skill already exists');
+          setTimeout(() => setStorageStatus(''), 2000);
+          return;
+        }
+        const newSkills = [...currentSkills, skill.trim()];
+        let updatedContact;
+        if (contact.enhanced) {
+          updatedContact = { ...contact, enhanced: { ...contact.enhanced, expertise: newSkills } };
+        } else {
+          updatedContact = { ...contact, inferred: { ...(contact.inferred || {}), skills: newSkills } };
+        }
+        const updatedContacts = contacts.map(c => c.id === contact.id ? updatedContact : c);
+        setContacts(updatedContacts);
+        setSelectedContact(updatedContact);
+        setNewSkillInput('');
+        await saveToSupabase(updatedContacts);
+        setStorageStatus('Skill added!');
+        setTimeout(() => setStorageStatus(''), 2000);
+      };
+
+      // ====== NEW FEATURE: Remove Skill ======
+      const removeSkillFromContact = async (contact, skillToRemove) => {
+        let updatedContact;
+        if (contact.enhanced?.expertise) {
+          const newSkills = contact.enhanced.expertise.filter(s => s !== skillToRemove);
+          updatedContact = { ...contact, enhanced: { ...contact.enhanced, expertise: newSkills } };
+        } else if (contact.inferred?.skills) {
+          const newSkills = contact.inferred.skills.filter(s => s !== skillToRemove);
+          updatedContact = { ...contact, inferred: { ...contact.inferred, skills: newSkills } };
+        } else {
+          return;
+        }
+        const updatedContacts = contacts.map(c => c.id === contact.id ? updatedContact : c);
+        setContacts(updatedContacts);
+        setSelectedContact(updatedContact);
+        await saveToSupabase(updatedContacts);
+        setStorageStatus('Skill removed');
+        setTimeout(() => setStorageStatus(''), 2000);
+      };
+
+      // ====== NEW FEATURE: Expert Search (Optimized) ======
+      const searchForExperts = async () => {
+        if (!expertiseQuery.trim()) return;
+        setIsSearchingExperts(true);
+        try {
+          // Pre-filter client-side to reduce API payload
+          const candidates = preFilterContacts(contacts, expertiseQuery, 30);
+          const contactsToSearch = candidates.length > 0 ? candidates : contacts.slice(0, 30);
+          
+          const summaries = contactsToSearch.map(c => ({
+            name: c.name,
+            position: c.position,
+            company: c.company,
+            skills: [...(c.enhanced?.expertise || []), ...(c.inferred?.skills || [])],
+            emailSkills: c.emailInsights?.expertiseSignals || [],
+            personalNotes: c.personalNotes || '',
+            interests: c.enhanced?.personalInterests || []
+          }));
+          const response = await fetch(ANTHROPIC_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 1000,
+              messages: [{ role: 'user', content: 'Find contacts who know about: "' + expertiseQuery + '"\n\nContacts: ' + JSON.stringify(summaries) + '\n\nReturn JSON only: { "matches": [{ "name": "", "relevance": "high/medium/low", "reason": "", "approachSuggestion": "" }] }' }]
+            })
+          });
+          const data = await response.json();
+          const textContent = data.content?.find(c => c.type === 'text')?.text || '';
+          const jsonMatch = textContent.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            // Sort results: high → medium → low
+            const relevanceOrder = { high: 0, medium: 1, low: 2 };
+            if (parsed.matches) {
+              parsed.matches.sort((a, b) => (relevanceOrder[a.relevance] || 2) - (relevanceOrder[b.relevance] || 2));
+            }
+            setExpertResults(parsed);
+          }
+        } catch (error) {
+          setStorageStatus('Search failed: ' + error.message);
+          setTimeout(() => setStorageStatus(''), 5000);
+        } finally { setIsSearchingExperts(false); }
+      };
+
+      // ====== NEW FEATURE: Notifications ======
+      const markNotificationRead = async (notifId) => {
+        try {
+          await supabase.from('notifications').update({ read: true }).eq('id', notifId);
+          setNotifications(prev => prev.filter(n => n.id !== notifId));
+        } catch (err) { console.error('Failed to mark read:', err); }
+      };
+
+      const sendNoteToContact = async (recipientUserId, message) => {
+        try {
+          const displayName = user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0];
+          await supabase.from('notifications').insert({
+            sender_id: user.id,
+            recipient_id: recipientUserId,
+            sender_name: displayName,
+            sender_email: user.email,
+            message
+          });
+          setStorageStatus('Note sent!');
+          setTimeout(() => setStorageStatus(''), 2000);
+        } catch (err) {
+          setStorageStatus('Failed to send: ' + err.message);
+          setTimeout(() => setStorageStatus(''), 5000);
+        }
+      };
+
+      const checkPlatformUser = async (email) => {
+        if (!email) return null;
+        const cached = platformUserCache[email.toLowerCase()];
+        if (cached !== undefined) return cached;
+        try {
+          const { data } = await supabase.rpc('check_platform_user', { contact_email: email });
+          const result = data?.[0] || null;
+          setPlatformUserCache(prev => ({ ...prev, [email.toLowerCase()]: result }));
+          return result;
+        } catch (err) { return null; }
+      };
+
+      const openSendNote = async (contact) => {
+        const platformUser = await checkPlatformUser(contact.email);
+        setSendNotePlatformUserId(platformUser?.found_user_id || null);
+        setSendNoteContact(contact);
+      };
+
+      // ====== NEW FEATURE: Invitations ======
+      const createInvitation = async (contact) => {
+        try {
+          const displayName = user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0];
+          const { data, error } = await supabase.from('invitations').insert({
+            inviter_id: user.id,
+            inviter_name: displayName,
+            invitee_email: contact.email || '',
+            invitee_name: contact.name,
+            status: 'pending'
+          }).select().single();
+          if (error) throw error;
+          const baseUrl = window.location.origin;
+          const link = baseUrl + '/?ref=' + encodeURIComponent(displayName);
+          setInviteLink(link);
+          return link;
+        } catch (err) {
+          setStorageStatus('Failed to create invite: ' + err.message);
+          setTimeout(() => setStorageStatus(''), 5000);
+          return null;
+        }
+      };
+
+      const openInvite = (contact) => {
+        setInviteLink(null);
+        setInviteContact(contact);
+      };
+
+      // ====== NEW FEATURE: Dedupe ======
+      const runDedupe = () => {
+        const groups = findDuplicates(contacts);
+        if (groups.length === 0) {
+          setStorageStatus('No duplicates found!');
+          setTimeout(() => setStorageStatus(''), 3000);
+          return;
+        }
+        setDuplicateGroups(groups);
+        setShowDedupeModal(true);
+      };
+
+      const handleMerge = async (groups, selectedKeepers) => {
+        const idsToRemove = new Set();
+        const updatedMap = new Map();
+
+        groups.forEach((group, gi) => {
+          const allInGroup = [group.primary, ...group.duplicates];
+          const keeperKey = selectedKeepers[gi];
+          let keeperIndex = 0;
+          if (keeperKey !== 'primary') {
+            keeperIndex = parseInt(keeperKey.replace('dup-', ''));
+          }
+          const keeper = allInGroup[keeperIndex];
+          
+          // Merge all others into keeper
+          let merged = { ...keeper };
+          allInGroup.forEach((c, ci) => {
+            if (ci !== keeperIndex) {
+              merged = mergeContacts(merged, c);
+              idsToRemove.add(c.id);
+            }
+          });
+          updatedMap.set(keeper.id, merged);
+        });
+
+        const updatedContacts = contacts
+          .filter(c => !idsToRemove.has(c.id))
+          .map(c => updatedMap.has(c.id) ? updatedMap.get(c.id) : c);
+
+        setContacts(updatedContacts);
+        await saveToSupabase(updatedContacts);
+        setShowDedupeModal(false);
+        setDuplicateGroups([]);
+        setStorageStatus('Merged ' + groups.length + ' duplicate group(s). Removed ' + idsToRemove.size + ' duplicate records.');
+        setTimeout(() => setStorageStatus(''), 4000);
+      };
+
+      // ====== Manual Merge (from contact card) ======
+      const handleManualMerge = async (keeper, merging) => {
+        const merged = mergeContacts(keeper, merging);
+        const updatedContacts = contacts
+          .filter(c => c.id !== merging.id)
+          .map(c => c.id === keeper.id ? merged : c);
+        setContacts(updatedContacts);
+        setSelectedContact(merged);
+        await saveToSupabase(updatedContacts);
+        setStorageStatus('Merged "' + merging.name + '" into "' + keeper.name + '"');
+        setTimeout(() => setStorageStatus(''), 4000);
+      };
+
+      // Filtered and sorted contacts
+      const filteredContacts = useMemo(() => {
+        return contacts.filter(c => {
+          if (!searchQuery) return true;
+          const q = searchQuery.toLowerCase();
+          const allSkills = [...(c.enhanced?.expertise || []), ...(c.inferred?.skills || [])];
+          return c.name.toLowerCase().includes(q) || (c.company || '').toLowerCase().includes(q) || (c.position || '').toLowerCase().includes(q) || (c.email || '').toLowerCase().includes(q) || allSkills.some(s => s.toLowerCase().includes(q));
+        }).sort((a, b) => {
+          if (sortOrder === 'alpha-asc') return (a.name || '').localeCompare(b.name || '');
+          if (sortOrder === 'alpha-desc') return (b.name || '').localeCompare(a.name || '');
+          if (sortOrder === 'company-asc') return (a.company || '').localeCompare(b.company || '');
+          if (sortOrder === 'company-desc') return (b.company || '').localeCompare(a.company || '');
+          return 0;
+        });
+      }, [contacts, searchQuery, sortOrder]);
+
+      const getTierBadge = (tier) => tier === 3 
+        ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">Enhanced</span>
+        : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">Inferred</span>;
+
+      const getConfidenceBadge = (conf) => {
+        if (!conf) return null;
+        const colors = { high: 'bg-emerald-100 text-emerald-700', medium: 'bg-amber-100 text-amber-700', low: 'bg-red-100 text-red-700' };
+        return <span className={"px-2 py-0.5 rounded-full text-xs font-medium " + colors[conf.confidence]}>{conf.score}%</span>;
+      };
+
+      if (isLoading) {
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-amber-50/30 flex items-center justify-center">
+            <div className="text-center">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg mx-auto mb-4 animate-pulse">
+                <Icon name="Users" size={32} className="text-white" />
+              </div>
+              <p className="text-slate-600">Loading your contacts...</p>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-amber-50/30">
+          {/* ====== HEADER ====== */}
+          <header className="border-b border-slate-200/80 bg-white/70 backdrop-blur-sm sticky top-0 z-40">
+            <div className="max-w-7xl mx-auto px-6 py-4">
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div className="flex items-center gap-3">
+                  <a href="index.html" className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-orange-200 hover:from-amber-500 hover:to-orange-600 transition-all" title="Back to Home">
+                    <Icon name="Users" size={20} className="text-white" />
+                  </a>
+                  <div>
+                    <h1 className="text-xl font-bold text-slate-800">I Wish I Knew Someone Who...</h1>
+                    <p className="text-xs text-slate-500">{contacts.length} contacts &bull; {contacts.filter(c => c.tier === 3).length} enhanced</p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-3 flex-wrap">
+                  {storageStatus && <span className="text-sm text-emerald-600 font-medium">{storageStatus}</span>}
+                  {googleError && <span className="text-sm text-red-500 font-medium">{googleError}</span>}
+                  
+                  {/* Notification Bell */}
+                  <div className="relative">
+                    <button onClick={() => setShowNotifications(!showNotifications)} className="relative p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+                      <Icon name="Bell" size={18} />
+                      {notifications.length > 0 && (
+                        <span className="absolute -top-0.5 -right-0.5 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center font-medium">{notifications.length}</span>
+                      )}
+                    </button>
+                    {showNotifications && <NotificationPanel notifications={notifications} onMarkRead={markNotificationRead} onClose={() => setShowNotifications(false)} />}
+                  </div>
+                  
+                  {!isGoogleConnected ? (
+                    <button onClick={connectGmail} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-red-500 to-red-600 text-white text-sm font-medium hover:from-red-600 hover:to-red-700 shadow-sm">
+                      <Icon name="Mail" size={16} /> Connect Gmail
+                    </button>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-emerald-600 font-medium">&#10003; Gmail</span>
+                      <button onClick={importGoogleContacts} disabled={isImportingContacts} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-100 text-emerald-700 text-sm font-medium hover:bg-emerald-200 disabled:opacity-50">
+                        {isImportingContacts ? <Icon name="Loader2" size={16} className="animate-spin" /> : <Icon name="CloudDownload" size={16} />}
+                        Import
+                      </button>
+                      <button onClick={disconnectGmail} className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50">
+                        <Icon name="X" size={16} />
+                      </button>
+                    </div>
+                  )}
+                  
+                  <button onClick={handleSave} disabled={isSaving} className={"inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium " + (hasUnsavedChanges ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-500')}>
+                    {isSaving ? <Icon name="Loader2" size={16} className="animate-spin" /> : <Icon name="Save" size={16} />}
+                    {hasUnsavedChanges ? 'Save' : 'Saved'}
+                  </button>
+                  
+                  <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-sm font-medium text-slate-600">
+                    <Icon name="Upload" size={16} /> Import CSV
+                    <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
+                  </label>
+
+                  <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
+                    <span className="text-xs text-slate-500">{user.email}</span>
+                    <button onClick={onLogout} className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50" title="Sign out">
+                      <Icon name="LogOut" size={16} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-7xl mx-auto px-6 py-8">
+            {/* ====== EXPERT SEARCH ====== */}
+            <div className="mb-8 p-6 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 shadow-xl shadow-orange-200/50">
+              <h2 className="text-white font-semibold mb-3 flex items-center gap-2">
+                <Icon name="Zap" size={18} className="text-white" /> Who do you know that knows about...
+              </h2>
+              <div className="flex gap-3">
+                <input type="text" placeholder="e.g., marathon training, payment fraud, React..." value={expertiseQuery} onChange={(e) => setExpertiseQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && searchForExperts()} className="flex-1 px-4 py-3 rounded-xl bg-white/95 text-slate-800 placeholder-slate-400 focus:outline-none" />
+                <button onClick={searchForExperts} disabled={isSearchingExperts || !expertiseQuery.trim()} className="px-6 py-3 rounded-xl bg-white text-orange-600 font-semibold hover:bg-orange-50 disabled:opacity-50 flex items-center gap-2">
+                  {isSearchingExperts ? <Icon name="Loader2" size={18} className="animate-spin" /> : <Icon name="Search" size={18} />}
+                  Search
+                </button>
+              </div>
+              {expertResults?.matches?.length > 0 && (
+                <div className="mt-4 p-4 bg-white/10 rounded-xl">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-white/90 font-medium">Results:</h3>
+                    <button onClick={() => { setExpertResults(null); setExpertiseQuery(''); }} className="text-white/70 hover:text-white text-xs flex items-center gap-1">
+                      <Icon name="X" size={12} /> Clear
+                    </button>
+                  </div>
+                  {expertResults.matches.map((match, idx) => {
+                    const matchedContact = contacts.find(c => c.name.toLowerCase() === match.name.toLowerCase());
+                    const isSecondDegree = match.degree === 2;
+                    return (
+                      <div key={idx} onClick={() => !isSecondDegree && matchedContact && setSelectedContact(matchedContact)} className={"bg-white rounded-lg p-3 mb-2 " + (!isSecondDegree && matchedContact ? 'cursor-pointer hover:ring-2 hover:ring-amber-300' : '')}>
+                        <div className="flex items-center justify-between">
+                          {isSecondDegree ? (
+                            <div className="flex items-center gap-2">
+                              <Icon name="Users" size={14} className="text-purple-500" />
+                              <span className="font-medium text-slate-800">A contact of {match.viaContact || 'yours'} may be able to help</span>
+                            </div>
+                          ) : (
+                            <span className="font-medium text-slate-800">{match.name}</span>
+                          )}
+                          <span className={"px-2 py-0.5 rounded text-xs font-medium " + (match.relevance === 'high' ? 'bg-emerald-100 text-emerald-700' : match.relevance === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600')}>{match.relevance}</span>
+                        </div>
+                        <p className="text-sm text-slate-600 mt-1">{match.reason}</p>
+                        {isSecondDegree && (
+                          <div className="mt-2 flex items-center gap-2">
+                            <button onClick={(e) => { e.stopPropagation(); /* TODO: Request intro flow */ setStorageStatus('Intro request feature coming soon'); setTimeout(() => setStorageStatus(''), 3000); }} className="px-3 py-1.5 rounded-lg bg-purple-100 text-purple-700 text-xs font-medium hover:bg-purple-200 flex items-center gap-1">
+                              <Icon name="MessageSquare" size={12} /> Request Intro
+                            </button>
+                            <span className="text-xs text-slate-400">Ask your contact to connect you</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Bulk progress */}
+            {bulkProgress && (
+              <div className="mb-6 p-4 rounded-xl bg-blue-50 border border-blue-200">
+                <span className="text-sm font-medium text-blue-800">{bulkProgress.action} {bulkProgress.current} of {bulkProgress.total}...</span>
+                <div className="h-2 bg-blue-200 rounded-full overflow-hidden mt-2">
+                  <div className="h-full bg-blue-600 transition-all" style={{ width: ((bulkProgress.current / bulkProgress.total) * 100) + '%' }} />
+                </div>
+              </div>
+            )}
+
+            {/* ====== TOOLBAR ====== */}
+            <div className="mb-6 space-y-4">
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="relative flex-1 min-w-[200px] max-w-md">
+                  <Icon name="Search" size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input type="text" placeholder="Filter contacts..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                  {searchQuery && <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><Icon name="X" size={16} /></button>}
+                </div>
+                <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} className="px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-600">
+                  <option value="alpha-asc">Name A-Z</option>
+                  <option value="alpha-desc">Name Z-A</option>
+                  <option value="company-asc">Company A-Z</option>
+                  <option value="company-desc">Company Z-A</option>
+                </select>
+                <span className="text-sm text-slate-500">{filteredContacts.length} contacts</span>
+                <div className="flex items-center border border-slate-200 rounded-lg overflow-hidden">
+                  <button onClick={() => setViewMode('grid')} className={"px-3 py-2 flex items-center gap-1 text-sm " + (viewMode === 'grid' ? 'bg-amber-100 text-amber-700' : 'bg-white text-slate-500 hover:bg-slate-50')}>
+                    <Icon name="LayoutGrid" size={14} /> Grid
+                  </button>
+                  <button onClick={() => setViewMode('list')} className={"px-3 py-2 flex items-center gap-1 text-sm " + (viewMode === 'list' ? 'bg-amber-100 text-amber-700' : 'bg-white text-slate-500 hover:bg-slate-50')}>
+                    <Icon name="List" size={14} /> List
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <button onClick={selectAll} className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 flex items-center gap-2">
+                  <Icon name="CheckSquare" size={14} /> Select All ({filteredContacts.length})
+                </button>
+                {selectedIds.size > 0 && <button onClick={deselectAll} className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 flex items-center gap-2"><Icon name="Square" size={14} /> Deselect</button>}
+                {selectedIds.size > 0 && <span className="text-sm font-medium text-amber-600">{selectedIds.size} selected</span>}
+                {/* Dedupe button */}
+                <button onClick={runDedupe} className="px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 text-sm text-purple-700 hover:bg-purple-100 flex items-center gap-2 ml-auto">
+                  <Icon name="GitMerge" size={14} /> Find Duplicates
+                </button>
+              </div>
+              {selectedIds.size > 0 && !bulkProgress && (
+                <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-50 border border-amber-200 flex-wrap">
+                  <span className="text-sm font-medium text-amber-800">Bulk actions:</span>
+                  <button onClick={enhanceSelectedContacts} className="px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600 flex items-center gap-2 shadow-sm">
+                    <Icon name="Sparkles" size={14} /> Enhance ({selectedIds.size})
+                  </button>
+                  <button onClick={analyzeEmailsForSelected} disabled={!isGoogleConnected} className={"px-4 py-2 rounded-lg text-white text-sm font-medium flex items-center gap-2 shadow-sm " + (isGoogleConnected ? 'bg-blue-600 hover:bg-blue-700' : 'bg-slate-400 cursor-not-allowed')}>
+                    <Icon name="Mail" size={14} /> Analyze Emails ({contacts.filter(c => selectedIds.has(c.id) && c.email).length})
+                  </button>
+                  {!isGoogleConnected && <span className="text-xs text-slate-500 italic">Connect Gmail first</span>}
+                </div>
+              )}
+            </div>
+
+            {/* ====== CONTACT LIST ====== */}
+            {contacts.length === 0 ? (
+              <div className="text-center py-16">
+                <div className="w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-4"><Icon name="Users" size={32} className="text-slate-400" /></div>
+                <h3 className="text-lg font-semibold text-slate-700 mb-2">No contacts yet</h3>
+                <p className="text-slate-500">Import your LinkedIn connections or Gmail contacts to get started.</p>
+              </div>
+            ) : viewMode === 'grid' ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredContacts.map(contact => (
+                  <div key={contact.id} onClick={() => { setSelectedContact(contact); setActiveTab('profile'); setEditingNotes(false); setEditingEmail(false); setEmailContent(''); setNewSkillInput(''); }} className={"group p-5 rounded-2xl bg-white border-2 hover:shadow-lg cursor-pointer transition-all " + (selectedIds.has(contact.id) ? 'border-amber-400 bg-amber-50/30' : 'border-slate-200 hover:border-amber-300')}>
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex items-start gap-3">
+                        <input type="checkbox" checked={selectedIds.has(contact.id)} onChange={(e) => toggleSelect(contact.id, e)} onClick={(e) => e.stopPropagation()} className="mt-1 w-4 h-4 rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer" />
+                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center text-slate-500 font-semibold text-lg">
+                          {contact.firstName?.[0]}{contact.lastName?.[0]}
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        {getTierBadge(contact.tier)}
+                        {getConfidenceBadge(contact.nameConfidence)}
+                        {contact.emailInsights && (
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 flex items-center gap-1">
+                            <Icon name="Mail" size={10} /> Analyzed
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <h3 className="font-semibold text-slate-800 group-hover:text-amber-700">{contact.name}</h3>
+                    <p className="text-sm text-slate-600">{contact.position} {contact.company && ('at ' + contact.company)}</p>
+                    {/* Feature #1: Display email on card */}
+                    {contact.email && <p className="text-xs text-slate-400 mt-1 truncate">{contact.email}</p>}
+                    <div className="flex flex-wrap gap-1.5 mt-3">
+                      {[...(contact.enhanced?.expertise || contact.inferred?.skills || [])].slice(0, 3).map((skill, idx) => (
+                        <span key={idx} className={"px-2 py-1 rounded-lg text-xs " + (contact.enhanced?.expertise ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600')}>{skill}</span>
+                      ))}
+                      {contact.emailInsights?.expertiseSignals?.slice(0, 2).map((skill, idx) => (
+                        <span key={'email-' + idx} className="px-2 py-1 rounded-lg text-xs bg-blue-100 text-blue-700">{skill}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="w-10 px-3 py-3"><input type="checkbox" checked={selectedIds.size === filteredContacts.length && filteredContacts.length > 0} onChange={() => selectedIds.size === filteredContacts.length ? deselectAll() : selectAll()} className="w-4 h-4 rounded" /></th>
+                      <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Name</th>
+                      <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase hidden md:table-cell">Company</th>
+                      <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase hidden lg:table-cell">Email</th>
+                      <th className="px-3 py-3 text-center text-xs font-semibold text-slate-500 uppercase w-24">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredContacts.map(contact => (
+                      <tr key={contact.id} onClick={() => { setSelectedContact(contact); setActiveTab('profile'); setEditingEmail(false); setNewSkillInput(''); }} className={"hover:bg-slate-50 cursor-pointer " + (selectedIds.has(contact.id) ? 'bg-amber-50' : '')}>
+                        <td className="px-3 py-2"><input type="checkbox" checked={selectedIds.has(contact.id)} onChange={(e) => toggleSelect(contact.id, e)} onClick={(e) => e.stopPropagation()} className="w-4 h-4 rounded" /></td>
+                        <td className="px-3 py-2"><span className="font-medium text-slate-800">{contact.name}</span></td>
+                        <td className="px-3 py-2 text-sm text-slate-600 hidden md:table-cell">{contact.company || '\u2014'}</td>
+                        <td className="px-3 py-2 text-sm text-slate-400 hidden lg:table-cell truncate max-w-[200px]">{contact.email || '\u2014'}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center justify-center gap-1">
+                            {contact.tier === 3 ? <span className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center"><Icon name="Sparkles" size={12} className="text-emerald-600" /></span> : <span className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center"><Icon name="Circle" size={12} className="text-slate-400" /></span>}
+                            {contact.emailInsights ? <span className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center"><Icon name="Mail" size={12} className="text-blue-600" /></span> : <span className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center"><Icon name="MailX" size={12} className="text-slate-400" /></span>}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </main>
+
+          {/* ====== CONTACT DETAIL MODAL ====== */}
+          {selectedContact && (
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => { setSelectedContact(null); setEditingEmail(false); setNewSkillInput(''); }}>
+              <div className="bg-white rounded-3xl shadow-2xl max-w-3xl w-full flex flex-col overflow-hidden" style={{ maxHeight: 'calc(100vh - 32px)' }} onClick={(e) => e.stopPropagation()}>
+                {/* Modal Header */}
+                <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-amber-50/50 flex-shrink-0">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-start gap-4">
+                      <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white font-bold text-2xl shadow-lg">
+                        {selectedContact.firstName?.[0]}{selectedContact.lastName?.[0]}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 mb-1 flex-wrap"><h2 className="text-xl font-bold text-slate-800">{selectedContact.name}</h2>{getTierBadge(selectedContact.tier)}</div>
+                        <p className="text-slate-600">{selectedContact.position}</p>
+                        <p className="text-slate-500 text-sm">{selectedContact.company}</p>
+                        {/* Feature #1 & #2: Email display + edit */}
+                        <div className="mt-1">
+                          {editingEmail ? (
+                            <div className="flex items-center gap-2 mt-1">
+                              <input type="email" value={tempEmail} onChange={e => { setTempEmail(e.target.value); setEmailError(''); }} placeholder="email@example.com" className={"px-2 py-1 rounded-lg border text-sm w-56 " + (emailError ? 'border-red-300 bg-red-50' : 'border-slate-300')} autoFocus />
+                              <button onClick={() => saveContactEmail(selectedContact)} className="px-2 py-1 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600">Save</button>
+                              <button onClick={() => { setEditingEmail(false); setEmailError(''); }} className="px-2 py-1 rounded-lg border border-slate-300 text-slate-500 text-xs">Cancel</button>
+                              {emailError && <span className="text-xs text-red-500">{emailError}</span>}
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              {selectedContact.email ? (
+                                <span className="text-sm text-slate-400">{selectedContact.email}</span>
+                              ) : (
+                                <span className="text-xs text-slate-400 italic">No email</span>
+                              )}
+                              <button onClick={() => { setEditingEmail(true); setTempEmail(selectedContact.email || ''); setEmailError(''); }} className="text-xs text-amber-600 hover:text-amber-700 font-medium">{selectedContact.email ? 'Edit' : 'Add email'}</button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {/* Feature #3: Send Note */}
+                      <button onClick={() => openSendNote(selectedContact)} className="p-2 hover:bg-blue-50 rounded-lg text-slate-400 hover:text-blue-500" title="Send a note">
+                        <Icon name="MessageSquare" size={18} />
+                      </button>
+                      {/* Feature #4: Invite */}
+                      <button onClick={() => openInvite(selectedContact)} className="p-2 hover:bg-purple-50 rounded-lg text-slate-400 hover:text-purple-500" title="Invite to platform">
+                        <Icon name="UserPlus" size={18} />
+                      </button>
+                      {/* Manual Merge */}
+                      <button onClick={() => setManualMergeContact(selectedContact)} className="p-2 hover:bg-purple-50 rounded-lg text-slate-400 hover:text-purple-500" title="Merge with another contact">
+                        <Icon name="GitMerge" size={18} />
+                      </button>
+                      <button onClick={() => { setSelectedContact(null); setEditingEmail(false); setNewSkillInput(''); }} className="p-2 hover:bg-slate-100 rounded-lg"><Icon name="X" size={20} className="text-slate-400" /></button>
+                    </div>
+                  </div>
+                  <div className="flex gap-1 mt-4">
+                    <button onClick={() => setActiveTab('profile')} className={"px-4 py-2 rounded-lg text-sm font-medium " + (activeTab === 'profile' ? 'bg-amber-100 text-amber-800' : 'text-slate-500 hover:bg-slate-100')}>Profile</button>
+                    <button onClick={() => setActiveTab('email')} className={"px-4 py-2 rounded-lg text-sm font-medium " + (activeTab === 'email' ? 'bg-amber-100 text-amber-800' : 'text-slate-500 hover:bg-slate-100')}>Email Analysis</button>
+                  </div>
+                </div>
+                
+                {/* Modal Body */}
+                <div className="p-6 flex-1 overflow-y-auto modal-scroll min-h-0">
+                  {activeTab === 'profile' && (
+                    <>
+                      {selectedContact.enhanced?.summary && !selectedContact.enhanced?.noResults && (
+                        <div className="mb-6 p-4 rounded-xl bg-emerald-50 border border-emerald-100">
+                          <div className="flex items-center gap-2 mb-2"><Icon name="Globe" size={16} className="text-emerald-600" /><span className="text-sm font-medium text-emerald-700">Web-Enhanced</span></div>
+                          <p className="text-slate-700">{selectedContact.enhanced.summary}</p>
+                        </div>
+                      )}
+                      {/* Feature #5 & #6: Skills section with Add/Remove */}
+                      <div className="mb-6">
+                        <h4 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Skills &amp; Expertise</h4>
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {(selectedContact.enhanced?.expertise || selectedContact.inferred?.skills || []).map((skill, idx) => (
+                            <span key={idx} className={"inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium " + (selectedContact.enhanced?.expertise ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800')}>
+                              {skill}
+                              <button onClick={(e) => { e.stopPropagation(); removeSkillFromContact(selectedContact, skill); }} className="ml-0.5 hover:text-red-600 opacity-60 hover:opacity-100" title="Remove skill">
+                                <Icon name="X" size={12} />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                        {/* Add skill input */}
+                        <div className="flex items-center gap-2">
+                          <input type="text" value={newSkillInput} onChange={e => setNewSkillInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newSkillInput.trim()) addSkillToContact(selectedContact, newSkillInput); }} placeholder="Add a skill..." className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm flex-1 max-w-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                          <button onClick={() => addSkillToContact(selectedContact, newSkillInput)} disabled={!newSkillInput.trim()} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-40 flex items-center gap-1">
+                            <Icon name="Plus" size={14} /> Add
+                          </button>
+                        </div>
+                      </div>
+                      {selectedContact.emailInsights && (
+                        <div className="mb-6 p-4 rounded-xl bg-blue-50 border border-blue-100">
+                          <h4 className="text-sm font-semibold text-blue-700 mb-2">Email Insights</h4>
+                          <p className="text-sm text-slate-700">{selectedContact.emailInsights.keyInsights}</p>
+                          {selectedContact.emailInsights.expertiseSignals?.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {selectedContact.emailInsights.expertiseSignals.map((s, i) => <span key={i} className="px-2 py-1 rounded bg-blue-100 text-blue-800 text-xs">{s}</span>)}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <div className="mb-6 p-4 rounded-xl bg-slate-50 border border-slate-200">
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">Personal Notes</h4>
+                          {!editingNotes && <button onClick={() => { setEditingNotes(true); setTempNotes(selectedContact.personalNotes || ''); }} className="text-xs text-amber-600 hover:text-amber-700 font-medium">{selectedContact.personalNotes ? 'Edit' : 'Add notes'}</button>}
+                        </div>
+                        {editingNotes ? (
+                          <div>
+                            <textarea value={tempNotes} onChange={(e) => setTempNotes(e.target.value)} placeholder="Add personal notes..." className="w-full h-24 p-3 rounded-lg border border-slate-300 text-sm resize-none" />
+                            <div className="flex gap-2 mt-2">
+                              <button onClick={() => savePersonalNotes(selectedContact)} className="px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">Save</button>
+                              <button onClick={() => setEditingNotes(false)} className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-sm">Cancel</button>
+                            </div>
+                          </div>
+                        ) : <p className="text-sm text-slate-600">{selectedContact.personalNotes || 'No notes yet.'}</p>}
+                      </div>
+                    </>
+                  )}
+                  {activeTab === 'email' && (
+                    <>
+                      {isGoogleConnected && selectedContact.email ? (
+                        <div className="mb-4 p-4 rounded-xl bg-red-50 border border-red-100">
+                          <div className="flex items-center justify-between">
+                            <div><p className="text-sm font-medium text-red-800">Fetch from Gmail</p><p className="text-xs text-red-600">{selectedContact.email}</p></div>
+                            <button onClick={() => fetchAndAnalyzeEmails(selectedContact)} disabled={isFetchingEmails} className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+                              {isFetchingEmails ? <Icon name="Loader2" size={14} className="animate-spin" /> : <Icon name="Inbox" size={14} />} Fetch
+                            </button>
+                          </div>
+                        </div>
+                      ) : <div className="mb-4 p-4 rounded-xl bg-slate-100"><p className="text-sm text-slate-600">{!isGoogleConnected ? 'Connect Gmail to fetch emails' : 'No email address'}</p></div>}
+                      <textarea value={emailContent} onChange={(e) => setEmailContent(e.target.value)} placeholder="Paste email content or fetch from Gmail..." className="w-full h-48 p-4 rounded-xl border border-slate-200 bg-slate-50 text-sm resize-none mb-4" />
+                      <button onClick={() => analyzeEmailContent(selectedContact)} disabled={isAnalyzingEmail} className={"px-4 py-2 rounded-lg text-white font-medium disabled:opacity-50 flex items-center gap-2 " + (emailContent.trim() ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-400')}>
+                        {isAnalyzingEmail ? <Icon name="Loader2" size={16} className="animate-spin" /> : <Icon name="FileText" size={16} />} Analyze
+                      </button>
+                    </>
+                  )}
+                </div>
+                
+                {/* Modal Footer */}
+                {activeTab === 'profile' && (
+                  <div className="p-6 border-t border-slate-100 bg-slate-50 flex-shrink-0">
+                    {selectedContact.tier === 3 ? (
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-sm text-emerald-600"><Icon name="Check" size={16} /> Enhanced</div>
+                        <button onClick={() => enhanceProfile(selectedContact)} disabled={isEnhancing} className="px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100 disabled:opacity-50 flex items-center gap-2">
+                          {isEnhancing ? <Icon name="Loader2" size={14} className="animate-spin" /> : <Icon name="RefreshCw" size={14} />} Re-search
+                        </button>
+                      </div>
+                    ) : (
+                      <button onClick={() => enhanceProfile(selectedContact)} disabled={isEnhancing} className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold hover:from-amber-600 hover:to-orange-600 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg">
+                        {isEnhancing ? <><Icon name="Loader2" size={18} className="animate-spin" /> Searching...</> : <><Icon name="Sparkles" size={18} /> Enhance Profile</>}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ====== MODALS ====== */}
+          {sendNoteContact && (
+            <SendNoteModal
+              contact={sendNoteContact}
+              platformUserId={sendNotePlatformUserId}
+              onSend={sendNoteToContact}
+              onInviteInstead={openInvite}
+              onClose={() => setSendNoteContact(null)}
+            />
+          )}
+
+          {inviteContact && (
+            <InviteModal
+              contact={inviteContact}
+              inviteLink={inviteLink}
+              onCreateInvite={createInvitation}
+              onClose={() => { setInviteContact(null); setInviteLink(null); }}
+            />
+          )}
+
+          {showDedupeModal && duplicateGroups.length > 0 && (
+            <DedupeModal
+              groups={duplicateGroups}
+              onMerge={handleMerge}
+              onClose={() => { setShowDedupeModal(false); setDuplicateGroups([]); }}
+            />
+          )}
+
+          {manualMergeContact && (
+            <ManualMergeModal
+              sourceContact={manualMergeContact}
+              allContacts={contacts}
+              onMerge={handleManualMerge}
+              onClose={() => setManualMergeContact(null)}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // ============================================
+    // APP WRAPPER
+    // ============================================
+    function App() {
+      const [supabase, setSupabase] = useState(null);
+      const [user, setUser] = useState(null);
+      const [isLoading, setIsLoading] = useState(true);
+      const [error, setError] = useState(null);
+
+      useEffect(() => {
+        const initSupabase = async () => {
+          try {
+            const response = await fetch('/.netlify/functions/config');
+            const config = await response.json();
+            if (!config.supabaseUrl || !config.supabaseAnonKey) throw new Error('Supabase configuration missing');
+            const client = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+            setSupabase(client);
+            const { data: { session } } = await client.auth.getSession();
+            setUser(session?.user || null);
+            client.auth.onAuthStateChange((event, session) => setUser(session?.user || null));
+          } catch (err) {
+            console.error('Failed to initialize:', err);
+            setError(err.message);
+          } finally { setIsLoading(false); }
+        };
+        initSupabase();
+      }, []);
+
+      const handleLogout = async () => { await supabase.auth.signOut(); setUser(null); };
+
+      if (isLoading) {
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-amber-50/30 flex items-center justify-center">
+            <div className="text-center">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg mx-auto mb-4 animate-pulse">
+                <Icon name="Users" size={32} className="text-white" />
+              </div>
+              <p className="text-slate-600">Loading...</p>
+            </div>
+          </div>
+        );
+      }
+
+      if (error) {
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-amber-50/30 flex items-center justify-center p-4">
+            <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 border border-red-200">
+              <div className="text-center">
+                <div className="w-16 h-16 rounded-2xl bg-red-100 flex items-center justify-center mx-auto mb-4">
+                  <Icon name="AlertCircle" size={32} className="text-red-500" />
+                </div>
+                <h2 className="text-xl font-semibold text-slate-800 mb-2">Configuration Error</h2>
+                <p className="text-slate-600 mb-4">{error}</p>
+                <p className="text-sm text-slate-500">Make sure SUPABASE_URL and SUPABASE_ANON_KEY are set in Netlify environment variables.</p>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      if (!user) return <LoginScreen supabase={supabase} />;
+      return <ExpertiseFinder supabase={supabase} user={user} onLogout={handleLogout} />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
