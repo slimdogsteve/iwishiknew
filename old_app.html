@@ -17,18 +17,25 @@
     .modal-scroll::-webkit-scrollbar { width: 8px; }
     .modal-scroll::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
     .modal-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    .modal-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
   </style>
 </head>
 <body>
   <div id="root"></div>
   
   <script type="text/babel">
-    const { useState, useCallback, useEffect, useRef } = React;
+    const { useState, useCallback, useEffect, useRef, useMemo } = React;
 
+    // ============================================
+    // CONFIG
+    // ============================================
     const GOOGLE_CLIENT_ID = '697214265103-8l0lloceplcp7150jfa0eenq7jo483o1.apps.googleusercontent.com';
     const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/contacts.readonly';
     const ANTHROPIC_API_URL = '/.netlify/functions/anthropic-proxy';
 
+    // ============================================
+    // ICONS
+    // ============================================
     const Icon = ({ name, size = 16, className = "" }) => {
       const ref = useRef(null);
       useEffect(() => {
@@ -43,6 +50,11 @@
       }, [name, size, className]);
       return <span ref={ref} className="inline-flex" />;
     };
+
+    // ============================================
+    // UTILITIES
+    // ============================================
+    const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
     const buildGoogleAuthUrl = () => {
       const redirectUri = window.location.origin + window.location.pathname;
@@ -178,6 +190,150 @@
       return contacts;
     };
 
+    // ============================================
+    // DEDUPLICATION UTILITIES
+    // ============================================
+    const normalizeStr = (s) => (s || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+    
+    const similarityScore = (a, b) => {
+      if (!a || !b) return 0;
+      const na = normalizeStr(a);
+      const nb = normalizeStr(b);
+      if (na === nb) return 1;
+      if (na.includes(nb) || nb.includes(na)) return 0.8;
+      // Simple character overlap ratio
+      const setA = new Set(na.split(''));
+      const setB = new Set(nb.split(''));
+      const intersection = [...setA].filter(c => setB.has(c)).length;
+      const union = new Set([...setA, ...setB]).size;
+      return union > 0 ? intersection / union : 0;
+    };
+
+    const findDuplicates = (contacts) => {
+      const groups = [];
+      const used = new Set();
+      for (let i = 0; i < contacts.length; i++) {
+        if (used.has(i)) continue;
+        const dupes = [];
+        for (let j = i + 1; j < contacts.length; j++) {
+          if (used.has(j)) continue;
+          const a = contacts[i];
+          const b = contacts[j];
+          // Email match is definitive
+          const emailMatch = a.email && b.email && a.email.toLowerCase() === b.email.toLowerCase();
+          if (emailMatch) {
+            dupes.push({ index: j, contact: b, score: 1.0, reason: 'Same email' });
+            used.add(j);
+            continue;
+          }
+          // Name matching: require LAST NAME match or very high similarity
+          const lastA = normalizeStr(a.lastName || a.name?.split(' ').pop());
+          const lastB = normalizeStr(b.lastName || b.name?.split(' ').pop());
+          const firstA = normalizeStr(a.firstName || a.name?.split(' ')[0]);
+          const firstB = normalizeStr(b.firstName || b.name?.split(' ')[0]);
+          const lastNameMatch = lastA && lastB && lastA.length > 1 && (lastA === lastB);
+          const firstNameMatch = firstA && firstB && (firstA === firstB || firstA.startsWith(firstB) || firstB.startsWith(firstA));
+          // Must have matching last names AND similar first names
+          if (lastNameMatch && firstNameMatch) {
+            const companySim = similarityScore(a.company, b.company);
+            const score = 0.7 + (companySim * 0.3);
+            const reason = companySim > 0.5 ? 'Same name & similar company' : 'Same name';
+            dupes.push({ index: j, contact: b, score, reason });
+            used.add(j);
+          }
+        }
+        if (dupes.length > 0) {
+          used.add(i);
+          groups.push({ primary: contacts[i], duplicates: dupes.map(d => ({ ...d.contact, _matchReason: d.reason, _matchScore: d.score })) });
+        }
+      }
+      return groups;
+    };
+
+    const mergeContacts = (keeper, merging) => {
+      // Combine all skills
+      const keeperSkills = [...(keeper.enhanced?.expertise || []), ...(keeper.inferred?.skills || [])];
+      const mergingSkills = [...(merging.enhanced?.expertise || []), ...(merging.inferred?.skills || [])];
+      const allSkills = [...new Set([...keeperSkills, ...mergingSkills])];
+      
+      // Merge email insights expertise signals
+      const keeperSignals = keeper.emailInsights?.expertiseSignals || [];
+      const mergingSignals = merging.emailInsights?.expertiseSignals || [];
+      const allSignals = [...new Set([...keeperSignals, ...mergingSignals])];
+
+      const merged = { ...keeper };
+      // Use enhanced data from whichever has it, preferring keeper
+      if (!merged.enhanced && merging.enhanced) {
+        merged.enhanced = { ...merging.enhanced };
+      } else if (merged.enhanced) {
+        merged.enhanced = { ...merged.enhanced, expertise: allSkills };
+      }
+      // If keeper has no enhanced, put merged skills in inferred
+      if (!merged.enhanced) {
+        merged.inferred = { ...(merged.inferred || {}), skills: allSkills };
+      }
+      // Merge email insights
+      if (!merged.emailInsights && merging.emailInsights) {
+        merged.emailInsights = { ...merging.emailInsights, expertiseSignals: allSignals };
+      } else if (merged.emailInsights) {
+        merged.emailInsights = { ...merged.emailInsights, expertiseSignals: allSignals };
+      }
+      // Fill in missing fields
+      if (!merged.email && merging.email) merged.email = merging.email;
+      if (!merged.company && merging.company) merged.company = merging.company;
+      if (!merged.position && merging.position) merged.position = merging.position;
+      if (!merged.education && merging.education) merged.education = merging.education;
+      // Combine notes
+      if (merging.personalNotes && merging.personalNotes !== merged.personalNotes) {
+        merged.personalNotes = ((merged.personalNotes || '') + '\n' + merging.personalNotes).trim();
+      }
+      // Keep the better tier
+      merged.tier = Math.max(merged.tier || 1, merging.tier || 1);
+      return merged;
+    };
+
+    // ============================================
+    // LOCAL SEARCH PRE-FILTER (speeds up expert search)
+    // ============================================
+    const preFilterContacts = (contacts, query, maxResults = 30) => {
+      const queryLower = query.toLowerCase();
+      const queryWords = queryLower.split(/\s+/).filter(w => w.length > 2);
+      
+      const scored = contacts.map(c => {
+        let score = 0;
+        const allSkills = [...(c.enhanced?.expertise || []), ...(c.inferred?.skills || [])];
+        const allSignals = c.emailInsights?.expertiseSignals || [];
+        const searchable = [
+          ...allSkills, ...allSignals,
+          c.position || '', c.company || '', c.personalNotes || '',
+          c.enhanced?.summary || '',
+          ...(c.enhanced?.personalInterests || []),
+          ...(c.enhanced?.communityRoles || []),
+          ...(c.enhanced?.notableWork || [])
+        ].join(' ').toLowerCase();
+        
+        // Exact phrase match in skills (highest value)
+        if (allSkills.some(s => s.toLowerCase().includes(queryLower))) score += 10;
+        if (allSignals.some(s => s.toLowerCase().includes(queryLower))) score += 8;
+        // Word-level matches
+        for (const word of queryWords) {
+          if (searchable.includes(word)) score += 3;
+          // Partial match
+          if (allSkills.some(s => s.toLowerCase().includes(word))) score += 5;
+        }
+        return { contact: c, score };
+      });
+      
+      return scored
+        .filter(s => s.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, maxResults)
+        .map(s => s.contact);
+    };
+
+    // ============================================
+    // LOGIN SCREEN
+    // ============================================
     function LoginScreen({ supabase }) {
       const [isLoading, setIsLoading] = useState(false);
       const [error, setError] = useState(null);
@@ -235,7 +391,318 @@
       );
     }
 
+    // ============================================
+    // NOTIFICATION PANEL
+    // ============================================
+    function NotificationPanel({ notifications, onMarkRead, onClose }) {
+      if (notifications.length === 0) {
+        return (
+          <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-2xl border border-slate-200 z-50 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-slate-800">Notifications</h3>
+              <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded"><Icon name="X" size={14} className="text-slate-400" /></button>
+            </div>
+            <p className="text-sm text-slate-500 text-center py-4">No notifications</p>
+          </div>
+        );
+      }
+      return (
+        <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-xl shadow-2xl border border-slate-200 z-50 max-h-96 flex flex-col">
+          <div className="flex items-center justify-between p-4 border-b border-slate-100">
+            <h3 className="font-semibold text-slate-800">Notifications ({notifications.length})</h3>
+            <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded"><Icon name="X" size={14} className="text-slate-400" /></button>
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {notifications.map(n => (
+              <div key={n.id} className="p-4 border-b border-slate-50 hover:bg-slate-50">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-800">{n.sender_name || n.sender_email || 'Someone'}</p>
+                    <p className="text-sm text-slate-600 mt-1">{n.message}</p>
+                    <p className="text-xs text-slate-400 mt-1">{new Date(n.created_at).toLocaleDateString()} {new Date(n.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                  </div>
+                  <button onClick={() => onMarkRead(n.id)} className="flex-shrink-0 p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" title="Dismiss">
+                    <Icon name="Check" size={14} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // DEDUPE MODAL
+    // ============================================
+    function DedupeModal({ groups, onMerge, onClose }) {
+      const [selectedKeepers, setSelectedKeepers] = useState(() => {
+        const m = {};
+        groups.forEach((g, i) => { m[i] = 'primary'; });
+        return m;
+      });
+      const [includedGroups, setIncludedGroups] = useState(() => {
+        const m = {};
+        groups.forEach((g, i) => { m[i] = true; });
+        return m;
+      });
+
+      const toggleGroup = (gi) => {
+        setIncludedGroups(prev => ({ ...prev, [gi]: !prev[gi] }));
+      };
+
+      const includedCount = Object.values(includedGroups).filter(Boolean).length;
+
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full flex flex-col overflow-hidden" style={{ maxHeight: 'calc(100vh - 64px)' }} onClick={e => e.stopPropagation()}>
+            <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-amber-50/50">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800">Duplicate Contacts Found</h2>
+                  <p className="text-sm text-slate-500 mt-1">{groups.length} potential duplicate group{groups.length !== 1 ? 's' : ''} &bull; {includedCount} selected for merge</p>
+                </div>
+                <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg"><Icon name="X" size={20} className="text-slate-400" /></button>
+              </div>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1 modal-scroll space-y-6">
+              {groups.map((group, gi) => {
+                const isIncluded = includedGroups[gi];
+                return (
+                  <div key={gi} className={"rounded-xl border overflow-hidden transition-opacity " + (isIncluded ? 'border-slate-200' : 'border-slate-100 opacity-50')}>
+                    <div className="bg-slate-50 px-4 py-2 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <input type="checkbox" checked={isIncluded} onChange={() => toggleGroup(gi)} className="w-4 h-4 rounded text-amber-500 cursor-pointer" />
+                        <span className="text-sm font-medium text-slate-600">Group {gi + 1}</span>
+                        {group.duplicates[0]?._matchReason && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">{group.duplicates[0]._matchReason}</span>
+                        )}
+                      </div>
+                      {isIncluded && <span className="text-xs text-slate-400">Select record to keep:</span>}
+                    </div>
+                    {isIncluded && (
+                      <div className="divide-y divide-slate-100">
+                        {[group.primary, ...group.duplicates].map((contact, ci) => {
+                          const key = ci === 0 ? 'primary' : 'dup-' + ci;
+                          const isSelected = selectedKeepers[gi] === key;
+                          return (
+                            <label key={ci} className={"flex items-center gap-3 p-4 cursor-pointer hover:bg-slate-50 " + (isSelected ? 'bg-amber-50' : '')}>
+                              <input type="radio" name={'group-' + gi} checked={isSelected} onChange={() => setSelectedKeepers(prev => ({...prev, [gi]: key}))} className="w-4 h-4 text-amber-500" />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-slate-800">{contact.name}</span>
+                                  {contact.tier === 3 && <span className="px-1.5 py-0.5 rounded text-xs bg-emerald-100 text-emerald-700">Enhanced</span>}
+                                  <span className="px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-500">{contact.source || 'unknown'}</span>
+                                </div>
+                                <p className="text-sm text-slate-600 truncate">{contact.position} {contact.company ? 'at ' + contact.company : ''}</p>
+                                {contact.email && <p className="text-xs text-slate-400">{contact.email}</p>}
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {[...(contact.enhanced?.expertise || contact.inferred?.skills || [])].slice(0, 4).map((s, si) => (
+                                    <span key={si} className="px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-600">{s}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="p-6 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
+              <p className="text-sm text-slate-500">Skills from all duplicates will be merged into the kept record.</p>
+              <div className="flex gap-3">
+                <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+                <button onClick={() => { const filtered = groups.filter((_, i) => includedGroups[i]); const filteredKeepers = {}; let fi = 0; groups.forEach((_, i) => { if (includedGroups[i]) { filteredKeepers[fi] = selectedKeepers[i]; fi++; } }); onMerge(filtered, filteredKeepers); }} disabled={includedCount === 0} className="px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600 shadow-sm disabled:opacity-40">
+                  Merge {includedCount} Group{includedCount !== 1 ? 's' : ''}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // SEND NOTE MODAL
+    // ============================================
+    function SendNoteModal({ contact, platformUserId, onSend, onInviteInstead, onClose }) {
+      const [message, setMessage] = useState('');
+      const [sending, setSending] = useState(false);
+
+      const handleSend = async () => {
+        if (!message.trim()) return;
+        setSending(true);
+        await onSend(platformUserId, message.trim());
+        setSending(false);
+        onClose();
+      };
+
+      if (!platformUserId) {
+        return (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+              <div className="text-center mb-4">
+                <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center mx-auto mb-3">
+                  <Icon name="UserPlus" size={24} className="text-slate-400" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-800">{contact.name} isn't on the platform yet</h3>
+                <p className="text-sm text-slate-500 mt-2">You can only send notes to contacts who have an account. Would you like to invite them?</p>
+              </div>
+              <div className="flex gap-3">
+                <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+                <button onClick={() => { onClose(); onInviteInstead(contact); }} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600">Invite Instead</button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Send a Note to {contact.name}</h3>
+            <p className="text-sm text-slate-500 mb-4">This will appear in their notifications.</p>
+            <textarea value={message} onChange={e => setMessage(e.target.value)} placeholder="Write your note..." className="w-full h-32 p-3 rounded-xl border border-slate-200 bg-slate-50 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/20" autoFocus />
+            <div className="flex gap-3 mt-4">
+              <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+              <button onClick={handleSend} disabled={!message.trim() || sending} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600 disabled:opacity-50 flex items-center justify-center gap-2">
+                {sending ? <Icon name="Loader2" size={14} className="animate-spin" /> : <Icon name="Send" size={14} />} Send
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // INVITE MODAL
+    // ============================================
+    function InviteModal({ contact, inviteLink, onCreateInvite, onClose }) {
+      const [copied, setCopied] = useState(false);
+      const [creating, setCreating] = useState(false);
+      const [link, setLink] = useState(inviteLink);
+
+      const handleCreate = async () => {
+        setCreating(true);
+        const result = await onCreateInvite(contact);
+        if (result) setLink(result);
+        setCreating(false);
+      };
+
+      const copyLink = () => {
+        if (link) {
+          navigator.clipboard.writeText(link);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Invite {contact.name}</h3>
+            <p className="text-sm text-slate-500 mb-4">Generate an invite link they can use to join the platform and create an account.</p>
+            {!link ? (
+              <button onClick={handleCreate} disabled={creating} className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-medium hover:from-amber-600 hover:to-orange-600 disabled:opacity-50 flex items-center justify-center gap-2">
+                {creating ? <Icon name="Loader2" size={16} className="animate-spin" /> : <Icon name="Link" size={16} />} Generate Invite Link
+              </button>
+            ) : (
+              <div>
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-slate-50 border border-slate-200">
+                  <input type="text" value={link} readOnly className="flex-1 bg-transparent text-sm text-slate-700 outline-none truncate" />
+                  <button onClick={copyLink} className={"px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 " + (copied ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700 hover:bg-amber-200')}>
+                    <Icon name={copied ? "Check" : "Copy"} size={14} /> {copied ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+                <p className="text-xs text-slate-400 mt-2">Share this link with {contact.name} via email, text, or any messaging platform.</p>
+              </div>
+            )}
+            <button onClick={onClose} className="w-full mt-4 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Close</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // MANUAL MERGE MODAL
+    // ============================================
+    function ManualMergeModal({ sourceContact, allContacts, onMerge, onClose }) {
+      const [searchTerm, setSearchTerm] = useState('');
+      const [selectedTarget, setSelectedTarget] = useState(null);
+      const [keepSource, setKeepSource] = useState(true);
+
+      const candidates = allContacts.filter(c => {
+        if (c.id === sourceContact.id) return false;
+        if (!searchTerm) return false;
+        const q = searchTerm.toLowerCase();
+        return c.name.toLowerCase().includes(q) || (c.email || '').toLowerCase().includes(q) || (c.company || '').toLowerCase().includes(q);
+      }).slice(0, 10);
+
+      const handleMerge = () => {
+        if (!selectedTarget) return;
+        const keeper = keepSource ? sourceContact : selectedTarget;
+        const merging = keepSource ? selectedTarget : sourceContact;
+        onMerge(keeper, merging);
+        onClose();
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Merge {sourceContact.name} with...</h3>
+            <p className="text-sm text-slate-500 mb-4">Search for the duplicate contact to merge with.</p>
+            <input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search by name, email, or company..." className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 mb-3" autoFocus />
+            {candidates.length > 0 && (
+              <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl mb-4 divide-y divide-slate-100">
+                {candidates.map(c => (
+                  <label key={c.id} className={"flex items-center gap-3 p-3 cursor-pointer hover:bg-slate-50 " + (selectedTarget?.id === c.id ? 'bg-amber-50' : '')}>
+                    <input type="radio" name="merge-target" checked={selectedTarget?.id === c.id} onChange={() => setSelectedTarget(c)} className="w-4 h-4 text-amber-500" />
+                    <div className="flex-1 min-w-0">
+                      <span className="font-medium text-slate-800 text-sm">{c.name}</span>
+                      <p className="text-xs text-slate-500 truncate">{c.position} {c.company ? 'at ' + c.company : ''}{c.email ? ' \u2022 ' + c.email : ''}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
+            {searchTerm && candidates.length === 0 && (
+              <p className="text-sm text-slate-400 text-center py-3 mb-4">No matches found</p>
+            )}
+            {selectedTarget && (
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 mb-4">
+                <p className="text-sm font-medium text-slate-700 mb-2">Which record do you want to keep?</p>
+                <div className="space-y-2">
+                  <label className={"flex items-center gap-2 p-2 rounded-lg cursor-pointer " + (keepSource ? 'bg-amber-50 border border-amber-200' : 'hover:bg-slate-100')}>
+                    <input type="radio" name="keep" checked={keepSource} onChange={() => setKeepSource(true)} className="w-4 h-4 text-amber-500" />
+                    <span className="text-sm text-slate-700">{sourceContact.name} <span className="text-slate-400">({sourceContact.source || 'unknown'})</span></span>
+                  </label>
+                  <label className={"flex items-center gap-2 p-2 rounded-lg cursor-pointer " + (!keepSource ? 'bg-amber-50 border border-amber-200' : 'hover:bg-slate-100')}>
+                    <input type="radio" name="keep" checked={!keepSource} onChange={() => setKeepSource(false)} className="w-4 h-4 text-amber-500" />
+                    <span className="text-sm text-slate-700">{selectedTarget.name} <span className="text-slate-400">({selectedTarget.source || 'unknown'})</span></span>
+                  </label>
+                </div>
+                <p className="text-xs text-slate-400 mt-2">Skills from both records will be combined.</p>
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+              <button onClick={handleMerge} disabled={!selectedTarget} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-purple-500 to-purple-600 text-white text-sm font-medium hover:from-purple-600 hover:to-purple-700 disabled:opacity-40 flex items-center justify-center gap-2">
+                <Icon name="GitMerge" size={14} /> Merge
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // MAIN APP: EXPERTISE FINDER
+    // ============================================
     function ExpertiseFinder({ supabase, user, onLogout }) {
+      // Existing state
       const [contacts, setContacts] = useState([]);
       const [selectedContact, setSelectedContact] = useState(null);
       const [searchQuery, setSearchQuery] = useState('');
@@ -262,6 +729,23 @@
       const [isFetchingEmails, setIsFetchingEmails] = useState(false);
       const [googleError, setGoogleError] = useState(null);
 
+      // New state for features 1-9
+      const [editingEmail, setEditingEmail] = useState(false);
+      const [tempEmail, setTempEmail] = useState('');
+      const [emailError, setEmailError] = useState('');
+      const [newSkillInput, setNewSkillInput] = useState('');
+      const [notifications, setNotifications] = useState([]);
+      const [showNotifications, setShowNotifications] = useState(false);
+      const [sendNoteContact, setSendNoteContact] = useState(null);
+      const [sendNotePlatformUserId, setSendNotePlatformUserId] = useState(null);
+      const [inviteContact, setInviteContact] = useState(null);
+      const [inviteLink, setInviteLink] = useState(null);
+      const [showDedupeModal, setShowDedupeModal] = useState(false);
+      const [duplicateGroups, setDuplicateGroups] = useState([]);
+      const [platformUserCache, setPlatformUserCache] = useState({});
+      const [manualMergeContact, setManualMergeContact] = useState(null);
+
+      // Load contacts
       useEffect(() => {
         const loadContacts = async () => {
           setIsLoading(true);
@@ -279,6 +763,38 @@
         loadContacts();
       }, [user.id]);
 
+      // Ensure user profile exists
+      useEffect(() => {
+        const ensureProfile = async () => {
+          try {
+            const { data } = await supabase.from('user_profiles').select('id').eq('user_id', user.id).single();
+            if (!data) {
+              await supabase.from('user_profiles').insert({
+                user_id: user.id,
+                email: user.email,
+                display_name: user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0]
+              });
+            }
+          } catch (err) { /* profile may already exist from trigger */ }
+        };
+        ensureProfile();
+      }, [user.id]);
+
+      // Load notifications
+      useEffect(() => {
+        const loadNotifications = async () => {
+          try {
+            const { data } = await supabase.from('notifications').select('*').eq('recipient_id', user.id).eq('read', false).order('created_at', { ascending: false });
+            if (data) setNotifications(data);
+          } catch (err) { /* notifications table may not exist yet */ }
+        };
+        loadNotifications();
+        // Poll every 30 seconds
+        const interval = setInterval(loadNotifications, 30000);
+        return () => clearInterval(interval);
+      }, [user.id]);
+
+      // Parse Google token from URL hash
       useEffect(() => {
         const hash = window.location.hash;
         if (hash.includes('access_token=')) {
@@ -293,6 +809,7 @@
         }
       }, []);
 
+      // Save to Supabase
       const saveToSupabase = async (contactsToSave) => {
         setIsSaving(true);
         try {
@@ -311,6 +828,7 @@
 
       const handleSave = () => saveToSupabase(contacts);
 
+      // File upload (LinkedIn CSV)
       const handleFileUpload = (event) => {
         const file = event.target.files[0];
         if (!file) return;
@@ -318,8 +836,9 @@
         reader.onload = async (e) => {
           const parsed = parseLinkedInCSV(e.target.result);
           if (parsed.length > 0) {
-            setContacts(parsed);
-            await saveToSupabase(parsed);
+            const merged = [...contacts, ...parsed];
+            setContacts(merged);
+            await saveToSupabase(merged);
             setStorageStatus('Imported ' + parsed.length + ' contacts');
             setTimeout(() => setStorageStatus(''), 3000);
           }
@@ -327,6 +846,7 @@
         reader.readAsText(file);
       };
 
+      // Gmail
       const connectGmail = () => { window.location.href = buildGoogleAuthUrl(); };
       const disconnectGmail = () => { setGoogleAccessToken(null); setIsGoogleConnected(false); };
 
@@ -336,11 +856,9 @@
         setStorageStatus('Fetching contacts from Gmail...');
         try {
           const googleContacts = await fetchGoogleContacts(googleAccessToken);
-          const realContacts = contacts.filter(c => c.source === 'linkedin' || c.source === 'gmail');
-          const baseContacts = realContacts.length > 0 ? realContacts : [];
-          const existingEmails = new Set(baseContacts.map(c => c.email?.toLowerCase()).filter(Boolean));
+          const existingEmails = new Set(contacts.map(c => c.email?.toLowerCase()).filter(Boolean));
           let newCount = 0;
-          const mergedContacts = [...baseContacts];
+          const mergedContacts = [...contacts];
           for (const gc of googleContacts) {
             const emailLower = gc.email?.toLowerCase();
             if (!emailLower || !existingEmails.has(emailLower)) {
@@ -361,6 +879,7 @@
         } finally { setIsImportingContacts(false); }
       };
 
+      // Email fetch and analysis
       const fetchAndAnalyzeEmails = async (contact) => {
         if (!googleAccessToken) { setStorageStatus('Please connect Gmail first'); setTimeout(() => setStorageStatus(''), 3000); return; }
         if (!contact.email) { setStorageStatus('No email address'); setTimeout(() => setStorageStatus(''), 3000); return; }
@@ -381,6 +900,7 @@
         } finally { setIsFetchingEmails(false); }
       };
 
+      // Enhance profile
       const enhanceProfile = async (contact) => {
         setIsEnhancing(true);
         try {
@@ -416,6 +936,7 @@
         } finally { setIsEnhancing(false); }
       };
 
+      // Analyze email content
       const analyzeEmailContent = async (contact) => {
         if (!emailContent.trim()) { setStorageStatus('Please fetch or paste email content'); setTimeout(() => setStorageStatus(''), 3000); return; }
         setIsAnalyzingEmail(true);
@@ -447,6 +968,7 @@
         } finally { setIsAnalyzingEmail(false); }
       };
 
+      // Selection
       const toggleSelect = (contactId, e) => {
         e.stopPropagation();
         setSelectedIds(prev => {
@@ -456,10 +978,10 @@
           return newSet;
         });
       };
-
       const selectAll = () => setSelectedIds(new Set(filteredContacts.map(c => c.id)));
       const deselectAll = () => setSelectedIds(new Set());
 
+      // Bulk enhance
       const enhanceSelectedContacts = async () => {
         const selectedContacts = contacts.filter(c => selectedIds.has(c.id));
         if (selectedContacts.length === 0) return;
@@ -503,6 +1025,7 @@
         setTimeout(() => setStorageStatus(''), 3000);
       };
 
+      // Bulk analyze emails
       const analyzeEmailsForSelected = async () => {
         if (!googleAccessToken) { setStorageStatus('Please connect Gmail first'); setTimeout(() => setStorageStatus(''), 3000); return; }
         const selectedContacts = contacts.filter(c => selectedIds.has(c.id) && c.email);
@@ -522,7 +1045,7 @@
               body: JSON.stringify({
                 model: 'claude-sonnet-4-20250514',
                 max_tokens: 1000,
-                messages: [{ role: 'user', content: 'Analyze these email exchanges between ME (the user, ' + user.email + ') and my CONTACT named ' + contact.name + '.\n\nIMPORTANT: I want to learn about the CONTACT (' + contact.name + '), NOT about me. Only extract information that describes the CONTACT\'s skills, expertise, job, interests, and background. Do NOT attribute my skills or activities to the contact.\n\nEmails:\n' + emailText + '\n\nReturn JSON only with information ABOUT THE CONTACT (' + contact.name + '):\n{ "expertiseSignals": ["list skills/expertise/job role OF THE CONTACT only"], "projectsMentioned": [], "problemsSolved": [], "communicationStyle": "", "relationshipStrength": "strong/moderate/weak", "keyInsights": "brief summary of who the CONTACT is and what they do" }' }]
+                messages: [{ role: 'user', content: 'Analyze these email exchanges between ME (the user, ' + user.email + ') and my CONTACT named ' + contact.name + '.\n\nIMPORTANT: I want to learn about the CONTACT (' + contact.name + '), NOT about me.\n\nEmails:\n' + emailText + '\n\nReturn JSON only:\n{ "expertiseSignals": [], "projectsMentioned": [], "problemsSolved": [], "communicationStyle": "", "relationshipStrength": "", "keyInsights": "" }' }]
               })
             });
             const data = await response.json();
@@ -544,6 +1067,7 @@
         setTimeout(() => setStorageStatus(''), 3000);
       };
 
+      // Personal notes
       const savePersonalNotes = async (contact) => {
         const updatedContacts = contacts.map(c => c.id === contact.id ? { ...c, personalNotes: tempNotes } : c);
         setContacts(updatedContacts);
@@ -554,11 +1078,85 @@
         setTimeout(() => setStorageStatus(''), 2000);
       };
 
+      // ====== NEW FEATURE: Save Email ======
+      const saveContactEmail = async (contact) => {
+        if (tempEmail && !isValidEmail(tempEmail)) {
+          setEmailError('Please enter a valid email address');
+          return;
+        }
+        setEmailError('');
+        const updatedContacts = contacts.map(c => c.id === contact.id ? { ...c, email: tempEmail } : c);
+        setContacts(updatedContacts);
+        if (selectedContact?.id === contact.id) setSelectedContact(prev => ({ ...prev, email: tempEmail }));
+        setEditingEmail(false);
+        await saveToSupabase(updatedContacts);
+        setStorageStatus('Email saved!');
+        setTimeout(() => setStorageStatus(''), 2000);
+      };
+
+      // ====== NEW FEATURE: Add Skill ======
+      const addSkillToContact = async (contact, skill) => {
+        if (!skill.trim()) return;
+        const currentSkills = contact.enhanced?.expertise || contact.inferred?.skills || [];
+        if (currentSkills.some(s => s.toLowerCase() === skill.toLowerCase())) {
+          setStorageStatus('Skill already exists');
+          setTimeout(() => setStorageStatus(''), 2000);
+          return;
+        }
+        const newSkills = [...currentSkills, skill.trim()];
+        let updatedContact;
+        if (contact.enhanced) {
+          updatedContact = { ...contact, enhanced: { ...contact.enhanced, expertise: newSkills } };
+        } else {
+          updatedContact = { ...contact, inferred: { ...(contact.inferred || {}), skills: newSkills } };
+        }
+        const updatedContacts = contacts.map(c => c.id === contact.id ? updatedContact : c);
+        setContacts(updatedContacts);
+        setSelectedContact(updatedContact);
+        setNewSkillInput('');
+        await saveToSupabase(updatedContacts);
+        setStorageStatus('Skill added!');
+        setTimeout(() => setStorageStatus(''), 2000);
+      };
+
+      // ====== NEW FEATURE: Remove Skill ======
+      const removeSkillFromContact = async (contact, skillToRemove) => {
+        let updatedContact;
+        if (contact.enhanced?.expertise) {
+          const newSkills = contact.enhanced.expertise.filter(s => s !== skillToRemove);
+          updatedContact = { ...contact, enhanced: { ...contact.enhanced, expertise: newSkills } };
+        } else if (contact.inferred?.skills) {
+          const newSkills = contact.inferred.skills.filter(s => s !== skillToRemove);
+          updatedContact = { ...contact, inferred: { ...contact.inferred, skills: newSkills } };
+        } else {
+          return;
+        }
+        const updatedContacts = contacts.map(c => c.id === contact.id ? updatedContact : c);
+        setContacts(updatedContacts);
+        setSelectedContact(updatedContact);
+        await saveToSupabase(updatedContacts);
+        setStorageStatus('Skill removed');
+        setTimeout(() => setStorageStatus(''), 2000);
+      };
+
+      // ====== NEW FEATURE: Expert Search (Optimized) ======
       const searchForExperts = async () => {
         if (!expertiseQuery.trim()) return;
         setIsSearchingExperts(true);
         try {
-          const summaries = contacts.map(c => ({ name: c.name, position: c.position, company: c.company, skills: [...(c.enhanced?.expertise || []), ...(c.inferred?.skills || [])], personalNotes: c.personalNotes || '' }));
+          // Pre-filter client-side to reduce API payload
+          const candidates = preFilterContacts(contacts, expertiseQuery, 30);
+          const contactsToSearch = candidates.length > 0 ? candidates : contacts.slice(0, 30);
+          
+          const summaries = contactsToSearch.map(c => ({
+            name: c.name,
+            position: c.position,
+            company: c.company,
+            skills: [...(c.enhanced?.expertise || []), ...(c.inferred?.skills || [])],
+            emailSkills: c.emailInsights?.expertiseSignals || [],
+            personalNotes: c.personalNotes || '',
+            interests: c.enhanced?.personalInterests || []
+          }));
           const response = await fetch(ANTHROPIC_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -571,25 +1169,169 @@
           const data = await response.json();
           const textContent = data.content?.find(c => c.type === 'text')?.text || '';
           const jsonMatch = textContent.match(/\{[\s\S]*\}/);
-          if (jsonMatch) setExpertResults(JSON.parse(jsonMatch[0]));
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            // Sort results: high → medium → low
+            const relevanceOrder = { high: 0, medium: 1, low: 2 };
+            if (parsed.matches) {
+              parsed.matches.sort((a, b) => (relevanceOrder[a.relevance] || 2) - (relevanceOrder[b.relevance] || 2));
+            }
+            setExpertResults(parsed);
+          }
         } catch (error) {
           setStorageStatus('Search failed: ' + error.message);
           setTimeout(() => setStorageStatus(''), 5000);
         } finally { setIsSearchingExperts(false); }
       };
 
-      const filteredContacts = contacts.filter(c => {
-        if (!searchQuery) return true;
-        const q = searchQuery.toLowerCase();
-        const allSkills = [...(c.enhanced?.expertise || []), ...(c.inferred?.skills || [])];
-        return c.name.toLowerCase().includes(q) || (c.company || '').toLowerCase().includes(q) || (c.position || '').toLowerCase().includes(q) || allSkills.some(s => s.toLowerCase().includes(q));
-      }).sort((a, b) => {
-        if (sortOrder === 'alpha-asc') return (a.name || '').localeCompare(b.name || '');
-        if (sortOrder === 'alpha-desc') return (b.name || '').localeCompare(a.name || '');
-        if (sortOrder === 'company-asc') return (a.company || '').localeCompare(b.company || '');
-        if (sortOrder === 'company-desc') return (b.company || '').localeCompare(a.company || '');
-        return 0;
-      });
+      // ====== NEW FEATURE: Notifications ======
+      const markNotificationRead = async (notifId) => {
+        try {
+          await supabase.from('notifications').update({ read: true }).eq('id', notifId);
+          setNotifications(prev => prev.filter(n => n.id !== notifId));
+        } catch (err) { console.error('Failed to mark read:', err); }
+      };
+
+      const sendNoteToContact = async (recipientUserId, message) => {
+        try {
+          const displayName = user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0];
+          await supabase.from('notifications').insert({
+            sender_id: user.id,
+            recipient_id: recipientUserId,
+            sender_name: displayName,
+            sender_email: user.email,
+            message
+          });
+          setStorageStatus('Note sent!');
+          setTimeout(() => setStorageStatus(''), 2000);
+        } catch (err) {
+          setStorageStatus('Failed to send: ' + err.message);
+          setTimeout(() => setStorageStatus(''), 5000);
+        }
+      };
+
+      const checkPlatformUser = async (email) => {
+        if (!email) return null;
+        const cached = platformUserCache[email.toLowerCase()];
+        if (cached !== undefined) return cached;
+        try {
+          const { data } = await supabase.rpc('check_platform_user', { contact_email: email });
+          const result = data?.[0] || null;
+          setPlatformUserCache(prev => ({ ...prev, [email.toLowerCase()]: result }));
+          return result;
+        } catch (err) { return null; }
+      };
+
+      const openSendNote = async (contact) => {
+        const platformUser = await checkPlatformUser(contact.email);
+        setSendNotePlatformUserId(platformUser?.found_user_id || null);
+        setSendNoteContact(contact);
+      };
+
+      // ====== NEW FEATURE: Invitations ======
+      const createInvitation = async (contact) => {
+        try {
+          const displayName = user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0];
+          const { data, error } = await supabase.from('invitations').insert({
+            inviter_id: user.id,
+            inviter_name: displayName,
+            invitee_email: contact.email || '',
+            invitee_name: contact.name,
+            status: 'pending'
+          }).select().single();
+          if (error) throw error;
+          const baseUrl = window.location.origin;
+          const link = baseUrl + '/?ref=' + encodeURIComponent(displayName);
+          setInviteLink(link);
+          return link;
+        } catch (err) {
+          setStorageStatus('Failed to create invite: ' + err.message);
+          setTimeout(() => setStorageStatus(''), 5000);
+          return null;
+        }
+      };
+
+      const openInvite = (contact) => {
+        setInviteLink(null);
+        setInviteContact(contact);
+      };
+
+      // ====== NEW FEATURE: Dedupe ======
+      const runDedupe = () => {
+        const groups = findDuplicates(contacts);
+        if (groups.length === 0) {
+          setStorageStatus('No duplicates found!');
+          setTimeout(() => setStorageStatus(''), 3000);
+          return;
+        }
+        setDuplicateGroups(groups);
+        setShowDedupeModal(true);
+      };
+
+      const handleMerge = async (groups, selectedKeepers) => {
+        const idsToRemove = new Set();
+        const updatedMap = new Map();
+
+        groups.forEach((group, gi) => {
+          const allInGroup = [group.primary, ...group.duplicates];
+          const keeperKey = selectedKeepers[gi];
+          let keeperIndex = 0;
+          if (keeperKey !== 'primary') {
+            keeperIndex = parseInt(keeperKey.replace('dup-', ''));
+          }
+          const keeper = allInGroup[keeperIndex];
+          
+          // Merge all others into keeper
+          let merged = { ...keeper };
+          allInGroup.forEach((c, ci) => {
+            if (ci !== keeperIndex) {
+              merged = mergeContacts(merged, c);
+              idsToRemove.add(c.id);
+            }
+          });
+          updatedMap.set(keeper.id, merged);
+        });
+
+        const updatedContacts = contacts
+          .filter(c => !idsToRemove.has(c.id))
+          .map(c => updatedMap.has(c.id) ? updatedMap.get(c.id) : c);
+
+        setContacts(updatedContacts);
+        await saveToSupabase(updatedContacts);
+        setShowDedupeModal(false);
+        setDuplicateGroups([]);
+        setStorageStatus('Merged ' + groups.length + ' duplicate group(s). Removed ' + idsToRemove.size + ' duplicate records.');
+        setTimeout(() => setStorageStatus(''), 4000);
+      };
+
+      // ====== Manual Merge (from contact card) ======
+      const handleManualMerge = async (keeper, merging) => {
+        const merged = mergeContacts(keeper, merging);
+        const updatedContacts = contacts
+          .filter(c => c.id !== merging.id)
+          .map(c => c.id === keeper.id ? merged : c);
+        setContacts(updatedContacts);
+        setSelectedContact(merged);
+        await saveToSupabase(updatedContacts);
+        setStorageStatus('Merged "' + merging.name + '" into "' + keeper.name + '"');
+        setTimeout(() => setStorageStatus(''), 4000);
+      };
+
+      // Filtered and sorted contacts
+      const filteredContacts = useMemo(() => {
+        return contacts.filter(c => {
+          if (!searchQuery) return true;
+          const q = searchQuery.toLowerCase();
+          const allSkills = [...(c.enhanced?.expertise || []), ...(c.inferred?.skills || [])];
+          return c.name.toLowerCase().includes(q) || (c.company || '').toLowerCase().includes(q) || (c.position || '').toLowerCase().includes(q) || (c.email || '').toLowerCase().includes(q) || allSkills.some(s => s.toLowerCase().includes(q));
+        }).sort((a, b) => {
+          if (sortOrder === 'alpha-asc') return (a.name || '').localeCompare(b.name || '');
+          if (sortOrder === 'alpha-desc') return (b.name || '').localeCompare(a.name || '');
+          if (sortOrder === 'company-asc') return (a.company || '').localeCompare(b.company || '');
+          if (sortOrder === 'company-desc') return (b.company || '').localeCompare(a.company || '');
+          return 0;
+        });
+      }, [contacts, searchQuery, sortOrder]);
 
       const getTierBadge = (tier) => tier === 3 
         ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">Enhanced</span>
@@ -616,6 +1358,7 @@
 
       return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-amber-50/30">
+          {/* ====== HEADER ====== */}
           <header className="border-b border-slate-200/80 bg-white/70 backdrop-blur-sm sticky top-0 z-40">
             <div className="max-w-7xl mx-auto px-6 py-4">
               <div className="flex items-center justify-between flex-wrap gap-4">
@@ -625,7 +1368,7 @@
                   </a>
                   <div>
                     <h1 className="text-xl font-bold text-slate-800">I Wish I Knew Someone Who...</h1>
-                    <p className="text-xs text-slate-500">{contacts.length} contacts • {contacts.filter(c => c.tier === 3).length} enhanced</p>
+                    <p className="text-xs text-slate-500">{contacts.length} contacts &bull; {contacts.filter(c => c.tier === 3).length} enhanced</p>
                   </div>
                 </div>
                 
@@ -633,13 +1376,24 @@
                   {storageStatus && <span className="text-sm text-emerald-600 font-medium">{storageStatus}</span>}
                   {googleError && <span className="text-sm text-red-500 font-medium">{googleError}</span>}
                   
+                  {/* Notification Bell */}
+                  <div className="relative">
+                    <button onClick={() => setShowNotifications(!showNotifications)} className="relative p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+                      <Icon name="Bell" size={18} />
+                      {notifications.length > 0 && (
+                        <span className="absolute -top-0.5 -right-0.5 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center font-medium">{notifications.length}</span>
+                      )}
+                    </button>
+                    {showNotifications && <NotificationPanel notifications={notifications} onMarkRead={markNotificationRead} onClose={() => setShowNotifications(false)} />}
+                  </div>
+                  
                   {!isGoogleConnected ? (
                     <button onClick={connectGmail} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-red-500 to-red-600 text-white text-sm font-medium hover:from-red-600 hover:to-red-700 shadow-sm">
                       <Icon name="Mail" size={16} /> Connect Gmail
                     </button>
                   ) : (
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-emerald-600 font-medium">✓ Gmail</span>
+                      <span className="text-xs text-emerald-600 font-medium">&#10003; Gmail</span>
                       <button onClick={importGoogleContacts} disabled={isImportingContacts} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-100 text-emerald-700 text-sm font-medium hover:bg-emerald-200 disabled:opacity-50">
                         {isImportingContacts ? <Icon name="Loader2" size={16} className="animate-spin" /> : <Icon name="CloudDownload" size={16} />}
                         Import
@@ -672,6 +1426,7 @@
           </header>
 
           <main className="max-w-7xl mx-auto px-6 py-8">
+            {/* ====== EXPERT SEARCH ====== */}
             <div className="mb-8 p-6 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 shadow-xl shadow-orange-200/50">
               <h2 className="text-white font-semibold mb-3 flex items-center gap-2">
                 <Icon name="Zap" size={18} className="text-white" /> Who do you know that knows about...
@@ -693,13 +1448,29 @@
                   </div>
                   {expertResults.matches.map((match, idx) => {
                     const matchedContact = contacts.find(c => c.name.toLowerCase() === match.name.toLowerCase());
+                    const isSecondDegree = match.degree === 2;
                     return (
-                      <div key={idx} onClick={() => matchedContact && setSelectedContact(matchedContact)} className={"bg-white rounded-lg p-3 mb-2 " + (matchedContact ? 'cursor-pointer hover:ring-2 hover:ring-amber-300' : '')}>
+                      <div key={idx} onClick={() => !isSecondDegree && matchedContact && setSelectedContact(matchedContact)} className={"bg-white rounded-lg p-3 mb-2 " + (!isSecondDegree && matchedContact ? 'cursor-pointer hover:ring-2 hover:ring-amber-300' : '')}>
                         <div className="flex items-center justify-between">
-                          <span className="font-medium text-slate-800">{match.name}</span>
+                          {isSecondDegree ? (
+                            <div className="flex items-center gap-2">
+                              <Icon name="Users" size={14} className="text-purple-500" />
+                              <span className="font-medium text-slate-800">A contact of {match.viaContact || 'yours'} may be able to help</span>
+                            </div>
+                          ) : (
+                            <span className="font-medium text-slate-800">{match.name}</span>
+                          )}
                           <span className={"px-2 py-0.5 rounded text-xs font-medium " + (match.relevance === 'high' ? 'bg-emerald-100 text-emerald-700' : match.relevance === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600')}>{match.relevance}</span>
                         </div>
                         <p className="text-sm text-slate-600 mt-1">{match.reason}</p>
+                        {isSecondDegree && (
+                          <div className="mt-2 flex items-center gap-2">
+                            <button onClick={(e) => { e.stopPropagation(); /* TODO: Request intro flow */ setStorageStatus('Intro request feature coming soon'); setTimeout(() => setStorageStatus(''), 3000); }} className="px-3 py-1.5 rounded-lg bg-purple-100 text-purple-700 text-xs font-medium hover:bg-purple-200 flex items-center gap-1">
+                              <Icon name="MessageSquare" size={12} /> Request Intro
+                            </button>
+                            <span className="text-xs text-slate-400">Ask your contact to connect you</span>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -707,6 +1478,7 @@
               )}
             </div>
 
+            {/* Bulk progress */}
             {bulkProgress && (
               <div className="mb-6 p-4 rounded-xl bg-blue-50 border border-blue-200">
                 <span className="text-sm font-medium text-blue-800">{bulkProgress.action} {bulkProgress.current} of {bulkProgress.total}...</span>
@@ -716,6 +1488,7 @@
               </div>
             )}
 
+            {/* ====== TOOLBAR ====== */}
             <div className="mb-6 space-y-4">
               <div className="flex items-center gap-4 flex-wrap">
                 <div className="relative flex-1 min-w-[200px] max-w-md">
@@ -745,6 +1518,10 @@
                 </button>
                 {selectedIds.size > 0 && <button onClick={deselectAll} className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 flex items-center gap-2"><Icon name="Square" size={14} /> Deselect</button>}
                 {selectedIds.size > 0 && <span className="text-sm font-medium text-amber-600">{selectedIds.size} selected</span>}
+                {/* Dedupe button */}
+                <button onClick={runDedupe} className="px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 text-sm text-purple-700 hover:bg-purple-100 flex items-center gap-2 ml-auto">
+                  <Icon name="GitMerge" size={14} /> Find Duplicates
+                </button>
               </div>
               {selectedIds.size > 0 && !bulkProgress && (
                 <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-50 border border-amber-200 flex-wrap">
@@ -760,6 +1537,7 @@
               )}
             </div>
 
+            {/* ====== CONTACT LIST ====== */}
             {contacts.length === 0 ? (
               <div className="text-center py-16">
                 <div className="w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-4"><Icon name="Users" size={32} className="text-slate-400" /></div>
@@ -769,7 +1547,7 @@
             ) : viewMode === 'grid' ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredContacts.map(contact => (
-                  <div key={contact.id} onClick={() => { setSelectedContact(contact); setActiveTab('profile'); setEditingNotes(false); setEmailContent(''); }} className={"group p-5 rounded-2xl bg-white border-2 hover:shadow-lg cursor-pointer transition-all " + (selectedIds.has(contact.id) ? 'border-amber-400 bg-amber-50/30' : 'border-slate-200 hover:border-amber-300')}>
+                  <div key={contact.id} onClick={() => { setSelectedContact(contact); setActiveTab('profile'); setEditingNotes(false); setEditingEmail(false); setEmailContent(''); setNewSkillInput(''); }} className={"group p-5 rounded-2xl bg-white border-2 hover:shadow-lg cursor-pointer transition-all " + (selectedIds.has(contact.id) ? 'border-amber-400 bg-amber-50/30' : 'border-slate-200 hover:border-amber-300')}>
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-start gap-3">
                         <input type="checkbox" checked={selectedIds.has(contact.id)} onChange={(e) => toggleSelect(contact.id, e)} onClick={(e) => e.stopPropagation()} className="mt-1 w-4 h-4 rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer" />
@@ -789,6 +1567,8 @@
                     </div>
                     <h3 className="font-semibold text-slate-800 group-hover:text-amber-700">{contact.name}</h3>
                     <p className="text-sm text-slate-600">{contact.position} {contact.company && ('at ' + contact.company)}</p>
+                    {/* Feature #1: Display email on card */}
+                    {contact.email && <p className="text-xs text-slate-400 mt-1 truncate">{contact.email}</p>}
                     <div className="flex flex-wrap gap-1.5 mt-3">
                       {[...(contact.enhanced?.expertise || contact.inferred?.skills || [])].slice(0, 3).map((skill, idx) => (
                         <span key={idx} className={"px-2 py-1 rounded-lg text-xs " + (contact.enhanced?.expertise ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600')}>{skill}</span>
@@ -808,15 +1588,17 @@
                       <th className="w-10 px-3 py-3"><input type="checkbox" checked={selectedIds.size === filteredContacts.length && filteredContacts.length > 0} onChange={() => selectedIds.size === filteredContacts.length ? deselectAll() : selectAll()} className="w-4 h-4 rounded" /></th>
                       <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Name</th>
                       <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase hidden md:table-cell">Company</th>
+                      <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase hidden lg:table-cell">Email</th>
                       <th className="px-3 py-3 text-center text-xs font-semibold text-slate-500 uppercase w-24">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {filteredContacts.map(contact => (
-                      <tr key={contact.id} onClick={() => { setSelectedContact(contact); setActiveTab('profile'); }} className={"hover:bg-slate-50 cursor-pointer " + (selectedIds.has(contact.id) ? 'bg-amber-50' : '')}>
+                      <tr key={contact.id} onClick={() => { setSelectedContact(contact); setActiveTab('profile'); setEditingEmail(false); setNewSkillInput(''); }} className={"hover:bg-slate-50 cursor-pointer " + (selectedIds.has(contact.id) ? 'bg-amber-50' : '')}>
                         <td className="px-3 py-2"><input type="checkbox" checked={selectedIds.has(contact.id)} onChange={(e) => toggleSelect(contact.id, e)} onClick={(e) => e.stopPropagation()} className="w-4 h-4 rounded" /></td>
                         <td className="px-3 py-2"><span className="font-medium text-slate-800">{contact.name}</span></td>
-                        <td className="px-3 py-2 text-sm text-slate-600 hidden md:table-cell">{contact.company || '—'}</td>
+                        <td className="px-3 py-2 text-sm text-slate-600 hidden md:table-cell">{contact.company || '\u2014'}</td>
+                        <td className="px-3 py-2 text-sm text-slate-400 hidden lg:table-cell truncate max-w-[200px]">{contact.email || '\u2014'}</td>
                         <td className="px-3 py-2">
                           <div className="flex items-center justify-center gap-1">
                             {contact.tier === 3 ? <span className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center"><Icon name="Sparkles" size={12} className="text-emerald-600" /></span> : <span className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center"><Icon name="Circle" size={12} className="text-slate-400" /></span>}
@@ -831,9 +1613,11 @@
             )}
           </main>
 
+          {/* ====== CONTACT DETAIL MODAL ====== */}
           {selectedContact && (
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setSelectedContact(null)}>
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => { setSelectedContact(null); setEditingEmail(false); setNewSkillInput(''); }}>
               <div className="bg-white rounded-3xl shadow-2xl max-w-3xl w-full flex flex-col overflow-hidden" style={{ maxHeight: 'calc(100vh - 32px)' }} onClick={(e) => e.stopPropagation()}>
+                {/* Modal Header */}
                 <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-amber-50/50 flex-shrink-0">
                   <div className="flex items-start justify-between">
                     <div className="flex items-start gap-4">
@@ -844,9 +1628,43 @@
                         <div className="flex items-center gap-2 mb-1 flex-wrap"><h2 className="text-xl font-bold text-slate-800">{selectedContact.name}</h2>{getTierBadge(selectedContact.tier)}</div>
                         <p className="text-slate-600">{selectedContact.position}</p>
                         <p className="text-slate-500 text-sm">{selectedContact.company}</p>
+                        {/* Feature #1 & #2: Email display + edit */}
+                        <div className="mt-1">
+                          {editingEmail ? (
+                            <div className="flex items-center gap-2 mt-1">
+                              <input type="email" value={tempEmail} onChange={e => { setTempEmail(e.target.value); setEmailError(''); }} placeholder="email@example.com" className={"px-2 py-1 rounded-lg border text-sm w-56 " + (emailError ? 'border-red-300 bg-red-50' : 'border-slate-300')} autoFocus />
+                              <button onClick={() => saveContactEmail(selectedContact)} className="px-2 py-1 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600">Save</button>
+                              <button onClick={() => { setEditingEmail(false); setEmailError(''); }} className="px-2 py-1 rounded-lg border border-slate-300 text-slate-500 text-xs">Cancel</button>
+                              {emailError && <span className="text-xs text-red-500">{emailError}</span>}
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              {selectedContact.email ? (
+                                <span className="text-sm text-slate-400">{selectedContact.email}</span>
+                              ) : (
+                                <span className="text-xs text-slate-400 italic">No email</span>
+                              )}
+                              <button onClick={() => { setEditingEmail(true); setTempEmail(selectedContact.email || ''); setEmailError(''); }} className="text-xs text-amber-600 hover:text-amber-700 font-medium">{selectedContact.email ? 'Edit' : 'Add email'}</button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    <button onClick={() => setSelectedContact(null)} className="p-2 hover:bg-slate-100 rounded-lg"><Icon name="X" size={20} className="text-slate-400" /></button>
+                    <div className="flex items-center gap-1">
+                      {/* Feature #3: Send Note */}
+                      <button onClick={() => openSendNote(selectedContact)} className="p-2 hover:bg-blue-50 rounded-lg text-slate-400 hover:text-blue-500" title="Send a note">
+                        <Icon name="MessageSquare" size={18} />
+                      </button>
+                      {/* Feature #4: Invite */}
+                      <button onClick={() => openInvite(selectedContact)} className="p-2 hover:bg-purple-50 rounded-lg text-slate-400 hover:text-purple-500" title="Invite to platform">
+                        <Icon name="UserPlus" size={18} />
+                      </button>
+                      {/* Manual Merge */}
+                      <button onClick={() => setManualMergeContact(selectedContact)} className="p-2 hover:bg-purple-50 rounded-lg text-slate-400 hover:text-purple-500" title="Merge with another contact">
+                        <Icon name="GitMerge" size={18} />
+                      </button>
+                      <button onClick={() => { setSelectedContact(null); setEditingEmail(false); setNewSkillInput(''); }} className="p-2 hover:bg-slate-100 rounded-lg"><Icon name="X" size={20} className="text-slate-400" /></button>
+                    </div>
                   </div>
                   <div className="flex gap-1 mt-4">
                     <button onClick={() => setActiveTab('profile')} className={"px-4 py-2 rounded-lg text-sm font-medium " + (activeTab === 'profile' ? 'bg-amber-100 text-amber-800' : 'text-slate-500 hover:bg-slate-100')}>Profile</button>
@@ -854,6 +1672,7 @@
                   </div>
                 </div>
                 
+                {/* Modal Body */}
                 <div className="p-6 flex-1 overflow-y-auto modal-scroll min-h-0">
                   {activeTab === 'profile' && (
                     <>
@@ -863,12 +1682,25 @@
                           <p className="text-slate-700">{selectedContact.enhanced.summary}</p>
                         </div>
                       )}
+                      {/* Feature #5 & #6: Skills section with Add/Remove */}
                       <div className="mb-6">
-                        <h4 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Skills & Expertise</h4>
-                        <div className="flex flex-wrap gap-2">
+                        <h4 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Skills &amp; Expertise</h4>
+                        <div className="flex flex-wrap gap-2 mb-3">
                           {(selectedContact.enhanced?.expertise || selectedContact.inferred?.skills || []).map((skill, idx) => (
-                            <span key={idx} className={"px-3 py-1.5 rounded-lg text-sm font-medium " + (selectedContact.enhanced?.expertise ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800')}>{skill}</span>
+                            <span key={idx} className={"inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium " + (selectedContact.enhanced?.expertise ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800')}>
+                              {skill}
+                              <button onClick={(e) => { e.stopPropagation(); removeSkillFromContact(selectedContact, skill); }} className="ml-0.5 hover:text-red-600 opacity-60 hover:opacity-100" title="Remove skill">
+                                <Icon name="X" size={12} />
+                              </button>
+                            </span>
                           ))}
+                        </div>
+                        {/* Add skill input */}
+                        <div className="flex items-center gap-2">
+                          <input type="text" value={newSkillInput} onChange={e => setNewSkillInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newSkillInput.trim()) addSkillToContact(selectedContact, newSkillInput); }} placeholder="Add a skill..." className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm flex-1 max-w-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                          <button onClick={() => addSkillToContact(selectedContact, newSkillInput)} disabled={!newSkillInput.trim()} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-40 flex items-center gap-1">
+                            <Icon name="Plus" size={14} /> Add
+                          </button>
                         </div>
                       </div>
                       {selectedContact.emailInsights && (
@@ -919,6 +1751,7 @@
                   )}
                 </div>
                 
+                {/* Modal Footer */}
                 {activeTab === 'profile' && (
                   <div className="p-6 border-t border-slate-100 bg-slate-50 flex-shrink-0">
                     {selectedContact.tier === 3 ? (
@@ -938,10 +1771,50 @@
               </div>
             </div>
           )}
+
+          {/* ====== MODALS ====== */}
+          {sendNoteContact && (
+            <SendNoteModal
+              contact={sendNoteContact}
+              platformUserId={sendNotePlatformUserId}
+              onSend={sendNoteToContact}
+              onInviteInstead={openInvite}
+              onClose={() => setSendNoteContact(null)}
+            />
+          )}
+
+          {inviteContact && (
+            <InviteModal
+              contact={inviteContact}
+              inviteLink={inviteLink}
+              onCreateInvite={createInvitation}
+              onClose={() => { setInviteContact(null); setInviteLink(null); }}
+            />
+          )}
+
+          {showDedupeModal && duplicateGroups.length > 0 && (
+            <DedupeModal
+              groups={duplicateGroups}
+              onMerge={handleMerge}
+              onClose={() => { setShowDedupeModal(false); setDuplicateGroups([]); }}
+            />
+          )}
+
+          {manualMergeContact && (
+            <ManualMergeModal
+              sourceContact={manualMergeContact}
+              allContacts={contacts}
+              onMerge={handleManualMerge}
+              onClose={() => setManualMergeContact(null)}
+            />
+          )}
         </div>
       );
     }
 
+    // ============================================
+    // APP WRAPPER
+    // ============================================
     function App() {
       const [supabase, setSupabase] = useState(null);
       const [user, setUser] = useState(null);
