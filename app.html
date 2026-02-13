@@ -548,9 +548,11 @@
     // ============================================
     // SEND NOTE MODAL
     // ============================================
-    function SendNoteModal({ contact, platformUserId, onSend, onInviteInstead, onClose }) {
+    function SendNoteModal({ contact, platformUserId, onSend, onInviteInstead, onClose, currentUser }) {
       const [message, setMessage] = useState('');
       const [sending, setSending] = useState(false);
+      const [sendingEmail, setSendingEmail] = useState(false);
+      const [emailSent, setEmailSent] = useState(false);
 
       const handleSend = async () => {
         if (!message.trim()) return;
@@ -558,6 +560,33 @@
         await onSend(platformUserId, message.trim());
         setSending(false);
         onClose();
+      };
+
+      const handleSendViaEmail = async () => {
+        if (!message.trim() || !contact.email) return;
+        setSendingEmail(true);
+        try {
+          const senderName = currentUser?.user_metadata?.full_name || currentUser?.user_metadata?.name || currentUser?.email?.split('@')[0] || 'Someone';
+          const resp = await fetch('/.netlify/functions/send-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'note',
+              to: contact.email,
+              toName: contact.name,
+              senderName,
+              senderEmail: currentUser?.email || '',
+              message: message.trim()
+            })
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || 'Send failed');
+          setEmailSent(true);
+          setTimeout(() => onClose(), 1500);
+        } catch (err) {
+          alert('Failed to send email: ' + err.message);
+        }
+        setSendingEmail(false);
       };
 
       if (!platformUserId) {
@@ -569,11 +598,27 @@
                   <Icon name="UserPlus" size={24} className="text-slate-400" />
                 </div>
                 <h3 className="text-lg font-semibold text-slate-800">{contact.name} isn't on the platform yet</h3>
-                <p className="text-sm text-slate-500 mt-2">You can only send notes to contacts who have an account. Would you like to invite them?</p>
+                <p className="text-sm text-slate-500 mt-2">
+                  {contact.email 
+                    ? 'You can send them a note via email, or invite them to join the platform.'
+                    : 'You can only send notes to contacts who have an account. Would you like to invite them?'}
+                </p>
               </div>
-              <div className="flex gap-3">
-                <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
-                <button onClick={() => { onClose(); onInviteInstead(contact); }} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600">Invite Instead</button>
+              {contact.email && (
+                <div className="mb-3">
+                  <textarea value={message} onChange={e => setMessage(e.target.value)} placeholder="Write your note..." className="w-full h-24 p-3 rounded-xl border border-slate-200 bg-slate-50 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/20" autoFocus />
+                </div>
+              )}
+              <div className="flex flex-col gap-2">
+                {contact.email && (
+                  <button onClick={handleSendViaEmail} disabled={!message.trim() || sendingEmail || emailSent} className={"w-full px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 " + (emailSent ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50')}>
+                    {emailSent ? (<><Icon name="Check" size={14} /> Sent!</>) : sendingEmail ? (<><Icon name="Loader2" size={14} className="animate-spin" /> Sending...</>) : (<><Icon name="Mail" size={14} /> Send via Email</>)}
+                  </button>
+                )}
+                <div className="flex gap-2">
+                  <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+                  <button onClick={() => { onClose(); onInviteInstead(contact); }} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600">Invite to Platform</button>
+                </div>
               </div>
             </div>
           </div>
@@ -584,7 +629,7 @@
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-slate-800 mb-1">Send a Note to {contact.name}</h3>
-            <p className="text-sm text-slate-500 mb-4">This will appear in their notifications.</p>
+            <p className="text-sm text-slate-500 mb-4">This will appear in their notifications{contact.email ? ' and they\'ll get an email.' : '.'}</p>
             <textarea value={message} onChange={e => setMessage(e.target.value)} placeholder="Write your note..." className="w-full h-32 p-3 rounded-xl border border-slate-200 bg-slate-50 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/20" autoFocus />
             <div className="flex gap-3 mt-4">
               <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
@@ -600,10 +645,12 @@
     // ============================================
     // INVITE MODAL
     // ============================================
-    function InviteModal({ contact, inviteLink, onCreateInvite, onClose }) {
+    function InviteModal({ contact, inviteLink, onCreateInvite, senderName, onClose }) {
       const [copied, setCopied] = useState(false);
       const [creating, setCreating] = useState(false);
       const [link, setLink] = useState(inviteLink);
+      const [emailStatus, setEmailStatus] = useState(null); // null | 'sending' | 'sent' | 'failed'
+      const [emailError, setEmailError] = useState('');
 
       const handleCreate = async () => {
         setCreating(true);
@@ -620,24 +667,80 @@
         }
       };
 
+      const sendEmailInvite = async () => {
+        if (!link || !contact.email) return;
+        setEmailStatus('sending');
+        setEmailError('');
+        try {
+          const resp = await fetch('/.netlify/functions/send-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'invite',
+              to: contact.email,
+              toName: contact.name,
+              senderName: senderName || 'A colleague',
+              inviteLink: link
+            })
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || 'Send failed');
+          setEmailStatus('sent');
+        } catch (err) {
+          setEmailStatus('failed');
+          setEmailError(err.message);
+        }
+      };
+
       return (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-slate-800 mb-1">Invite {contact.name}</h3>
-            <p className="text-sm text-slate-500 mb-4">Generate an invite link they can use to join the platform and create an account.</p>
+            <p className="text-sm text-slate-500 mb-4">
+              {contact.email 
+                ? 'Send an invite email or generate a link to share manually.' 
+                : 'Generate an invite link they can use to join the platform and create an account.'}
+            </p>
             {!link ? (
               <button onClick={handleCreate} disabled={creating} className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-medium hover:from-amber-600 hover:to-orange-600 disabled:opacity-50 flex items-center justify-center gap-2">
                 {creating ? <Icon name="Loader2" size={16} className="animate-spin" /> : <Icon name="Link" size={16} />} Generate Invite Link
               </button>
             ) : (
-              <div>
-                <div className="flex items-center gap-2 p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <input type="text" value={link} readOnly className="flex-1 bg-transparent text-sm text-slate-700 outline-none truncate" />
-                  <button onClick={copyLink} className={"px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 " + (copied ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700 hover:bg-amber-200')}>
-                    <Icon name={copied ? "Check" : "Copy"} size={14} /> {copied ? 'Copied!' : 'Copy'}
-                  </button>
+              <div className="space-y-3">
+                {/* Email send option */}
+                {contact.email && (
+                  <div className="p-3 rounded-lg bg-purple-50 border border-purple-100">
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-purple-800">Send via email</p>
+                        <p className="text-xs text-purple-500 truncate">{contact.email}</p>
+                      </div>
+                      {emailStatus === 'sent' ? (
+                        <span className="px-3 py-1.5 rounded-lg bg-emerald-100 text-emerald-700 text-sm font-medium flex items-center gap-1">
+                          <Icon name="Check" size={14} /> Sent!
+                        </span>
+                      ) : (
+                        <button onClick={sendEmailInvite} disabled={emailStatus === 'sending'} className="px-3 py-1.5 rounded-lg bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 disabled:opacity-50 flex items-center gap-1">
+                          {emailStatus === 'sending' ? <Icon name="Loader2" size={14} className="animate-spin" /> : <Icon name="Mail" size={14} />}
+                          {emailStatus === 'sending' ? 'Sending...' : 'Send Email'}
+                        </button>
+                      )}
+                    </div>
+                    {emailStatus === 'failed' && (
+                      <p className="text-xs text-red-500 mt-1">{emailError || 'Failed to send. Try copying the link instead.'}</p>
+                    )}
+                  </div>
+                )}
+                {/* Copy link option */}
+                <div>
+                  <p className="text-xs text-slate-500 mb-1.5 font-medium">{contact.email ? 'Or copy the link:' : 'Share this link:'}</p>
+                  <div className="flex items-center gap-2 p-3 rounded-lg bg-slate-50 border border-slate-200">
+                    <input type="text" value={link} readOnly className="flex-1 bg-transparent text-sm text-slate-700 outline-none truncate" />
+                    <button onClick={copyLink} className={"px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 " + (copied ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700 hover:bg-amber-200')}>
+                      <Icon name={copied ? "Check" : "Copy"} size={14} /> {copied ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
                 </div>
-                <p className="text-xs text-slate-400 mt-2">Share this link with {contact.name} via email, text, or any messaging platform.</p>
               </div>
             )}
             <button onClick={onClose} className="w-full mt-4 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Close</button>
@@ -1240,6 +1343,28 @@
             sender_email: user.email,
             message
           });
+
+          // Also send email notification if we have the contact's email
+          const contact = sendNoteContact;
+          if (contact?.email) {
+            try {
+              await fetch('/.netlify/functions/send-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  type: 'note',
+                  to: contact.email,
+                  toName: contact.name,
+                  senderName: displayName,
+                  senderEmail: user.email,
+                  message
+                })
+              });
+            } catch (emailErr) {
+              console.warn('Email notification failed (platform note still sent):', emailErr);
+            }
+          }
+
           setStorageStatus('Note sent!');
           setTimeout(() => setStorageStatus(''), 2000);
         } catch (err) {
@@ -1818,6 +1943,7 @@
               onSend={sendNoteToContact}
               onInviteInstead={openInvite}
               onClose={() => setSendNoteContact(null)}
+              currentUser={user}
             />
           )}
 
@@ -1826,6 +1952,7 @@
               contact={inviteContact}
               inviteLink={inviteLink}
               onCreateInvite={createInvitation}
+              senderName={user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0]}
               onClose={() => { setInviteContact(null); setInviteLink(null); }}
             />
           )}

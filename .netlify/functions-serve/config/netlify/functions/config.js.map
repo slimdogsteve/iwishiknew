@@ -1,7 +1,7 @@
 {
   "version": 3,
   "sources": ["../../../../../../dev/projects/prm/netlify/functions/config.js"],
-  "sourceRoot": "C:/Users/steve/AppData/Local/Temp/tmp-21540-WLqCXYUhRcWQ",
+  "sourceRoot": "C:/Users/steve/AppData/Local/Temp/tmp-35656-LYZAGuUbt1yO",
   "sourcesContent": ["// Netlify function to serve Supabase config from environment variables\nexports.handler = async (event, context) => {\n  return {\n    statusCode: 200,\n    headers: {\n      'Content-Type': 'application/json',\n      'Access-Control-Allow-Origin': '*'\n    },\n    body: JSON.stringify({\n      supabaseUrl: process.env.SUPABASE_URL,\n      supabaseAnonKey: process.env.SUPABASE_ANON_KEY\n    })\n  };\n};\n"],
   "mappings": ";AACA,QAAQ,UAAU,OAAO,OAAO,YAAY;AAC1C,SAAO;AAAA,IACL,YAAY;AAAA,IACZ,SAAS;AAAA,MACP,gBAAgB;AAAA,MAChB,+BAA+B;AAAA,IACjC;AAAA,IACA,MAAM,KAAK,UAAU;AAAA,MACnB,aAAa,QAAQ,IAAI;AAAA,MACzB,iBAAiB,QAAQ,IAAI;AAAA,IAC/B,CAAC;AAAA,EACH;AACF;",
   "names": []
