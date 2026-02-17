@@ -337,6 +337,13 @@
     function LoginScreen({ supabase }) {
       const [isLoading, setIsLoading] = useState(false);
       const [error, setError] = useState(null);
+      const [mode, setMode] = useState('login'); // 'login' | 'signup'
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [firstName, setFirstName] = useState('');
+      const [lastName, setLastName] = useState('');
+      const [confirmPassword, setConfirmPassword] = useState('');
+      const [successMsg, setSuccessMsg] = useState('');
 
       const handleGoogleLogin = async () => {
         setIsLoading(true);
@@ -353,6 +360,50 @@
         }
       };
 
+      const validatePassword = (pw) => {
+        if (pw.length < 8) return 'Password must be at least 8 characters';
+        if (!/[^a-zA-Z0-9]/.test(pw)) return 'Password must include at least one special character';
+        return null;
+      };
+
+      const handleEmailAuth = async (e) => {
+        e.preventDefault();
+        setError(null);
+        setSuccessMsg('');
+
+        if (mode === 'signup') {
+          if (!firstName.trim()) { setError('First name is required'); return; }
+          const pwErr = validatePassword(password);
+          if (pwErr) { setError(pwErr); return; }
+          if (password !== confirmPassword) { setError('Passwords do not match'); return; }
+        }
+
+        setIsLoading(true);
+        try {
+          if (mode === 'signup') {
+            const { data, error } = await supabase.auth.signUp({
+              email,
+              password,
+              options: {
+                data: { full_name: (firstName.trim() + ' ' + lastName.trim()).trim(), name: (firstName.trim() + ' ' + lastName.trim()).trim() }
+              }
+            });
+            if (error) throw error;
+            if (data?.user?.identities?.length === 0) {
+              setError('An account with this email already exists. Try signing in instead.');
+            } else {
+              setSuccessMsg('Account created! Check your email to confirm, then sign in.');
+              setMode('login');
+            }
+          } else {
+            const { error } = await supabase.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+          }
+        } catch (err) {
+          setError(err.message);
+        } finally { setIsLoading(false); }
+      };
+
       return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-amber-50/30 flex items-center justify-center p-4">
           <div className="max-w-md w-full">
@@ -364,8 +415,9 @@
               <p className="text-slate-600">Discover who in your network has the expertise you need</p>
             </div>
             <div className="bg-white rounded-2xl shadow-xl p-8 border border-slate-200">
-              <h2 className="text-xl font-semibold text-slate-800 mb-6 text-center">Sign in to continue</h2>
+              <h2 className="text-xl font-semibold text-slate-800 mb-6 text-center">{mode === 'signup' ? 'Create your account' : 'Sign in to continue'}</h2>
               {error && <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">{error}</div>}
+              {successMsg && <div className="mb-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm">{successMsg}</div>}
               <button onClick={handleGoogleLogin} disabled={isLoading} className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-all disabled:opacity-50">
                 <svg className="w-5 h-5" viewBox="0 0 24 24">
                   <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -373,9 +425,40 @@
                   <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
                   <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
                 </svg>
-                <span className="font-medium text-slate-700">{isLoading ? 'Signing in...' : 'Continue with Google'}</span>
+                <span className="font-medium text-slate-700">Continue with Google</span>
               </button>
-              <p className="mt-6 text-xs text-slate-500 text-center">Your contacts are stored securely and only accessible by you.</p>
+              <div className="flex items-center gap-3 my-5">
+                <div className="flex-1 h-px bg-slate-200"></div>
+                <span className="text-xs text-slate-400 font-medium">OR</span>
+                <div className="flex-1 h-px bg-slate-200"></div>
+              </div>
+              <form onSubmit={handleEmailAuth} className="space-y-3">
+                {mode === 'signup' && (
+                  <div className="flex gap-3">
+                    <input type="text" placeholder="First name *" value={firstName} onChange={e => setFirstName(e.target.value)} className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-300" />
+                    <input type="text" placeholder="Last name" value={lastName} onChange={e => setLastName(e.target.value)} className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-300" />
+                  </div>
+                )}
+                <input type="email" placeholder="Email address" value={email} onChange={e => setEmail(e.target.value)} required className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-300" />
+                <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-300" />
+                {mode === 'signup' && (
+                  <div>
+                    <input type="password" placeholder="Confirm password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-300" />
+                    <p className="text-xs text-slate-400 mt-1.5 ml-1">Min 8 characters, at least one special character</p>
+                  </div>
+                )}
+                <button type="submit" disabled={isLoading} className="w-full px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-medium hover:from-amber-600 hover:to-orange-600 disabled:opacity-50 text-sm">
+                  {isLoading ? 'Please wait...' : mode === 'signup' ? 'Create Account' : 'Sign In'}
+                </button>
+              </form>
+              <p className="mt-4 text-sm text-center text-slate-500">
+                {mode === 'login' ? (
+                  <>Don't have an account? <button onClick={() => { setMode('signup'); setError(null); setSuccessMsg(''); }} className="text-amber-600 font-medium hover:text-amber-700">Sign up</button></>
+                ) : (
+                  <>Already have an account? <button onClick={() => { setMode('login'); setError(null); setSuccessMsg(''); }} className="text-amber-600 font-medium hover:text-amber-700">Sign in</button></>
+                )}
+              </p>
+              <p className="mt-4 text-xs text-slate-500 text-center">Your contacts are stored securely and only accessible by you.</p>
             </div>
             <div className="mt-8 text-center">
               <h3 className="font-semibold text-slate-700 mb-3">What you can do:</h3>
@@ -394,14 +477,26 @@
     // ============================================
     // NOTIFICATION PANEL
     // ============================================
-    function NotificationPanel({ notifications, allMessages, onMarkRead, onDelete, onClose, onLoadAll }) {
+    function NotificationPanel({ notifications, allMessages, onMarkRead, onDelete, onClose, onLoadAll, onReply }) {
       const [tab, setTab] = useState('unread');
+      const [replyTo, setReplyTo] = useState(null);
+      const [replyMessage, setReplyMessage] = useState('');
+      const [sending, setSending] = useState(false);
       const displayList = tab === 'unread' ? notifications : allMessages;
 
       // Load all messages when switching to All tab
       const switchTab = (t) => {
         setTab(t);
         if (t === 'all' && onLoadAll) onLoadAll();
+      };
+
+      const handleReply = async () => {
+        if (!replyMessage.trim() || !replyTo) return;
+        setSending(true);
+        await onReply(replyTo.sender_id, replyMessage.trim(), { email: replyTo.sender_email, name: replyTo.sender_name });
+        setSending(false);
+        setReplyTo(null);
+        setReplyMessage('');
       };
 
       return (
@@ -431,7 +526,25 @@
                         {!n.read && <span className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0"></span>}
                       </div>
                       <p className="text-sm text-slate-600 mt-1">{n.message}</p>
-                      <p className="text-xs text-slate-400 mt-1">{new Date(n.created_at).toLocaleDateString()} {new Date(n.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                      <div className="flex items-center gap-3 mt-1.5">
+                        <p className="text-xs text-slate-400">{new Date(n.created_at).toLocaleDateString()} {new Date(n.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                        {n.sender_id && (
+                          <button onClick={() => { setReplyTo(n); setReplyMessage(''); if (!n.read) onMarkRead(n.id); }} className="text-xs text-blue-500 hover:text-blue-700 font-medium flex items-center gap-1">
+                            <Icon name="Reply" size={12} /> Reply
+                          </button>
+                        )}
+                      </div>
+                      {replyTo?.id === n.id && (
+                        <div className="mt-2 flex gap-2">
+                          <input type="text" value={replyMessage} onChange={e => setReplyMessage(e.target.value)} placeholder="Type a reply..." className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" autoFocus onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) handleReply(); }} />
+                          <button onClick={handleReply} disabled={!replyMessage.trim() || sending} className="px-2.5 py-1.5 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50">
+                            {sending ? <Icon name="Loader2" size={12} className="animate-spin" /> : <Icon name="Send" size={12} />}
+                          </button>
+                          <button onClick={() => setReplyTo(null)} className="px-2 py-1.5 rounded-lg border border-slate-200 text-slate-400 text-xs hover:bg-slate-50">
+                            <Icon name="X" size={12} />
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className="flex flex-col gap-1 flex-shrink-0">
                       {!n.read && (
@@ -750,6 +863,448 @@
     }
 
     // ============================================
+    // MY PROFILE MODAL
+    // ============================================
+    function MyProfileModal({ user, supabase, onClose }) {
+      const [loading, setLoading] = useState(true);
+      const [saving, setSaving] = useState(false);
+      const [enhancing, setEnhancing] = useState(false);
+      const [profile, setProfile] = useState({ display_name: '', title: '', company: '', published_skills: [] });
+      const [editing, setEditing] = useState(false);
+      const [editName, setEditName] = useState('');
+      const [editTitle, setEditTitle] = useState('');
+      const [editCompany, setEditCompany] = useState('');
+      const [editSkills, setEditSkills] = useState('');
+      const [newSkill, setNewSkill] = useState('');
+      const [status, setStatus] = useState('');
+
+      useEffect(() => {
+        const load = async () => {
+          try {
+            const { data } = await supabase.from('user_profiles').select('display_name, title, company, published_skills, email').eq('user_id', user.id).single();
+            if (data) setProfile(data);
+          } catch (err) { console.error('Load profile error:', err); }
+          setLoading(false);
+        };
+        load();
+      }, []);
+
+      const startEditing = () => {
+        setEditName(profile.display_name || '');
+        setEditTitle(profile.title || '');
+        setEditCompany(profile.company || '');
+        setEditSkills((profile.published_skills || []).join(', '));
+        setEditing(true);
+      };
+
+      const saveProfile = async () => {
+        setSaving(true);
+        try {
+          const skillsArr = editSkills.split(',').map(s => s.trim()).filter(Boolean);
+          const updates = {
+            display_name: editName.trim(),
+            title: editTitle.trim(),
+            company: editCompany.trim(),
+            published_skills: skillsArr.length > 0 ? skillsArr : null
+          };
+          await supabase.from('user_profiles').update(updates).eq('user_id', user.id);
+          setProfile(prev => ({ ...prev, ...updates }));
+          setEditing(false);
+          setStatus('Profile saved!');
+          setTimeout(() => setStatus(''), 2000);
+        } catch (err) { setStatus('Save failed: ' + err.message); }
+        setSaving(false);
+      };
+
+      const removeSkill = async (skillToRemove) => {
+        const updated = (profile.published_skills || []).filter(s => s !== skillToRemove);
+        await supabase.from('user_profiles').update({ published_skills: updated.length > 0 ? updated : null }).eq('user_id', user.id);
+        setProfile(prev => ({ ...prev, published_skills: updated }));
+      };
+
+      const addSkill = async () => {
+        if (!newSkill.trim()) return;
+        const updated = [...new Set([...(profile.published_skills || []), newSkill.trim()])];
+        await supabase.from('user_profiles').update({ published_skills: updated }).eq('user_id', user.id);
+        setProfile(prev => ({ ...prev, published_skills: updated }));
+        setNewSkill('');
+      };
+
+      const enhanceProfile = async () => {
+        setEnhancing(true);
+        try {
+          const response = await fetch(ANTHROPIC_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 1500,
+              tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+              messages: [{ role: 'user', content: 'Use web_search to find information about ' + (profile.display_name || '') + ' who works at ' + (profile.company || '') + ' as ' + (profile.title || '') + ' (email: ' + user.email + '). Search for their LinkedIn profile, articles, news. Respond with ONLY this JSON: { "skills": ["skill1", "skill2", ...], "summary": "brief bio" }' }]
+            })
+          });
+          const data = await response.json();
+          const textContent = data.content?.find(c => c.type === 'text')?.text || '';
+          const jsonMatch = textContent.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const enhanced = JSON.parse(jsonMatch[0]);
+            const existing = profile.published_skills || [];
+            const merged = [...new Set([...existing, ...(enhanced.skills || [])])];
+            await supabase.from('user_profiles').update({ published_skills: merged }).eq('user_id', user.id);
+            setProfile(prev => ({ ...prev, published_skills: merged }));
+            setStatus('Found ' + (enhanced.skills?.length || 0) + ' additional skills!');
+            setTimeout(() => setStatus(''), 3000);
+          }
+        } catch (err) { setStatus('Enhance failed: ' + err.message); }
+        setEnhancing(false);
+      };
+
+      if (loading) return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-white rounded-2xl p-8"><Icon name="Loader2" size={24} className="animate-spin text-amber-500" /></div>
+        </div>
+      );
+
+      const skills = profile.published_skills || [];
+
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full flex flex-col overflow-hidden" style={{ maxHeight: 'calc(100vh - 64px)' }} onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-amber-50 to-orange-50">
+              <div className="flex items-start justify-between">
+                <div className="flex items-start gap-4">
+                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white font-bold text-2xl shadow-lg">
+                    {(profile.display_name || '?')[0]}
+                  </div>
+                  <div>
+                    {editing ? (
+                      <input type="text" value={editName} onChange={e => setEditName(e.target.value)} className="text-xl font-bold text-slate-800 bg-white px-2 py-1 rounded-lg border border-slate-200 mb-1 w-full" />
+                    ) : (
+                      <h2 className="text-xl font-bold text-slate-800 mb-1">{profile.display_name || 'Your Name'}</h2>
+                    )}
+                    {editing ? (
+                      <div className="space-y-1.5">
+                        <input type="text" value={editTitle} onChange={e => setEditTitle(e.target.value)} placeholder="Job title" className="w-full px-2 py-1 rounded-lg border border-slate-200 text-sm bg-white" />
+                        <input type="text" value={editCompany} onChange={e => setEditCompany(e.target.value)} placeholder="Company" className="w-full px-2 py-1 rounded-lg border border-slate-200 text-sm bg-white" />
+                      </div>
+                    ) : (
+                      <>
+                        <p className="text-slate-600">{profile.title || <span className="italic text-slate-400">No title set</span>}</p>
+                        <p className="text-slate-500 text-sm">{profile.company || <span className="italic text-slate-400">No company set</span>}</p>
+                      </>
+                    )}
+                    <p className="text-xs text-slate-400 mt-1">{user.email}</p>
+                  </div>
+                </div>
+                <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg"><Icon name="X" size={20} className="text-slate-400" /></button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 flex-1 overflow-y-auto">
+              {status && <div className="mb-4 p-2 rounded-lg bg-emerald-50 text-emerald-700 text-sm text-center">{status}</div>}
+
+              <div className="mb-5">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">Your Skills &amp; Expertise</h4>
+                  <p className="text-xs text-slate-400">Visible to your connections</p>
+                </div>
+                {skills.length === 0 && !editing ? (
+                  <p className="text-sm text-slate-400 italic">No skills added yet. Edit your profile or use Enhance to discover skills.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {skills.map((skill, idx) => (
+                      <span key={idx} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium bg-amber-100 text-amber-800">
+                        {skill}
+                        <button onClick={() => removeSkill(skill)} className="ml-0.5 hover:text-red-600 opacity-60 hover:opacity-100" title="Remove">
+                          <Icon name="X" size={12} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {!editing && (
+                  <div className="flex gap-2">
+                    <input type="text" value={newSkill} onChange={e => setNewSkill(e.target.value)} placeholder="Add a skill..." onKeyDown={e => e.key === 'Enter' && addSkill()} className="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                    <button onClick={addSkill} disabled={!newSkill.trim()} className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-700 text-sm font-medium hover:bg-amber-200 disabled:opacity-50">Add</button>
+                  </div>
+                )}
+              </div>
+
+              {editing && (
+                <div className="mb-5">
+                  <label className="text-xs font-medium text-slate-500 mb-1 block">Skills (comma-separated)</label>
+                  <input type="text" value={editSkills} onChange={e => setEditSkills(e.target.value)} placeholder="Ad Tech, Media Planning, Python" className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm" />
+                </div>
+              )}
+
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
+                <p className="text-xs text-slate-500 mb-1">This is how your connections see you when they search for expertise. Keep your skills up to date so people can find you.</p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-slate-100 flex items-center gap-3">
+              {editing ? (
+                <>
+                  <button onClick={() => setEditing(false)} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+                  <button onClick={saveProfile} disabled={saving} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600 disabled:opacity-50">
+                    {saving ? 'Saving...' : 'Save Profile'}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button onClick={startEditing} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100 flex items-center justify-center gap-2">
+                    <Icon name="Pencil" size={14} /> Edit Profile
+                  </button>
+                  <button onClick={enhanceProfile} disabled={enhancing} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-sm font-medium hover:from-emerald-600 hover:to-teal-600 disabled:opacity-50 flex items-center justify-center gap-2">
+                    {enhancing ? <><Icon name="Loader2" size={14} className="animate-spin" /> Enhancing...</> : <><Icon name="Sparkles" size={14} /> Enhance Profile</>}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // ONBOARDING MODAL
+    // ============================================
+    function OnboardingModal({ user, supabase, onComplete }) {
+      const [step, setStep] = useState(1);
+      const [title, setTitle] = useState('');
+      const [company, setCompany] = useState('');
+      const [skills, setSkills] = useState('');
+      const [saving, setSaving] = useState(false);
+      const [enhancing, setEnhancing] = useState(false);
+      const displayName = user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0];
+
+      const handleSaveProfile = async () => {
+        setSaving(true);
+        try {
+          const skillsArr = skills.split(',').map(s => s.trim()).filter(Boolean);
+          await supabase.from('user_profiles').update({
+            title: title.trim(),
+            company: company.trim(),
+            published_skills: skillsArr.length > 0 ? skillsArr : null
+          }).eq('user_id', user.id);
+          setStep(2);
+        } catch (err) { console.error('Profile save error:', err); }
+        setSaving(false);
+      };
+
+      const handleEnhance = async () => {
+        setEnhancing(true);
+        try {
+          const response = await fetch(ANTHROPIC_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 1500,
+              tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+              messages: [{ role: 'user', content: 'Use web_search to find information about ' + displayName + ' who works at ' + company + ' as ' + title + '. Search for their LinkedIn profile, articles, news. Respond with ONLY this JSON: { "summary": "2-3 sentence bio", "skills": ["skill1", "skill2", ...], "interests": [] }' }]
+            })
+          });
+          const data = await response.json();
+          const textContent = data.content?.find(c => c.type === 'text')?.text || '';
+          const jsonMatch = textContent.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const enhanced = JSON.parse(jsonMatch[0]);
+            const existingSkills = skills.split(',').map(s => s.trim()).filter(Boolean);
+            const allSkills = [...new Set([...existingSkills, ...(enhanced.skills || [])])];
+            await supabase.from('user_profiles').update({
+              published_skills: allSkills
+            }).eq('user_id', user.id);
+          }
+        } catch (err) { console.error('Enhance error:', err); }
+        setEnhancing(false);
+        onComplete();
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-8">
+            {step === 1 ? (
+              <>
+                <div className="text-center mb-6">
+                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center mx-auto mb-3 shadow-lg">
+                    <Icon name="UserCircle" size={28} className="text-white" />
+                  </div>
+                  <h2 className="text-2xl font-bold text-slate-800 mb-1">Welcome, {displayName}!</h2>
+                  <p className="text-slate-500">Tell us a bit about yourself so your connections can find your expertise.</p>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-500 mb-1 block">Job Title</label>
+                    <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g., VP of Marketing" className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-500 mb-1 block">Company</label>
+                    <input type="text" value={company} onChange={e => setCompany(e.target.value)} placeholder="e.g., Acme Inc." className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-500 mb-1 block">Skills &amp; Expertise</label>
+                    <input type="text" value={skills} onChange={e => setSkills(e.target.value)} placeholder="e.g., Ad Tech, Media Planning, Python (comma-separated)" className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                    <p className="text-xs text-slate-400 mt-1">Separate with commas. These will be visible to your connections.</p>
+                  </div>
+                </div>
+                <div className="flex gap-3 mt-6">
+                  <button onClick={onComplete} className="flex-1 px-4 py-2.5 rounded-xl border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Skip for now</button>
+                  <button onClick={handleSaveProfile} disabled={saving} className="flex-1 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600 disabled:opacity-50">
+                    {saving ? 'Saving...' : 'Save & Continue'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-center mb-6">
+                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center mx-auto mb-3 shadow-lg">
+                    <Icon name="Sparkles" size={28} className="text-white" />
+                  </div>
+                  <h2 className="text-2xl font-bold text-slate-800 mb-1">Enhance Your Profile?</h2>
+                  <p className="text-slate-500">We can search the web to find and add more of your skills and expertise automatically.</p>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={onComplete} className="flex-1 px-4 py-2.5 rounded-xl border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">No thanks</button>
+                  <button onClick={handleEnhance} disabled={enhancing} className="flex-1 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-sm font-medium hover:from-emerald-600 hover:to-teal-600 disabled:opacity-50 flex items-center justify-center gap-2">
+                    {enhancing ? <><Icon name="Loader2" size={14} className="animate-spin" /> Enhancing...</> : <><Icon name="Sparkles" size={14} /> Enhance Profile</>}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // DELETE CONFIRM MODAL
+    // ============================================
+    function DeleteConfirmModal({ contact, onConfirm, onClose }) {
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6" onClick={e => e.stopPropagation()}>
+            <div className="text-center mb-4">
+              <div className="w-12 h-12 rounded-xl bg-red-100 flex items-center justify-center mx-auto mb-3">
+                <Icon name="Trash2" size={24} className="text-red-500" />
+              </div>
+              <h3 className="text-lg font-semibold text-slate-800">Delete Contact</h3>
+              <p className="text-sm text-slate-500 mt-2">Are you sure you want to delete <strong>{contact.name}</strong>? This action cannot be undone.</p>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+              <button onClick={() => onConfirm(contact)} className="flex-1 px-4 py-2 rounded-lg bg-red-500 text-white text-sm font-medium hover:bg-red-600">Delete</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // SELF-PROFILE AUGMENT PROMPT
+    // ============================================
+    function SelfAugmentPrompt({ insights, onAccept, onDecline }) {
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onDecline}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+            <div className="text-center mb-4">
+              <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center mx-auto mb-3">
+                <Icon name="UserCircle" size={24} className="text-blue-500" />
+              </div>
+              <h3 className="text-lg font-semibold text-slate-800">Update Your Profile?</h3>
+              <p className="text-sm text-slate-500 mt-2">Based on this email analysis, we identified some skills that may also apply to <strong>your</strong> profile:</p>
+            </div>
+            {insights.length > 0 && (
+              <div className="flex flex-wrap gap-2 justify-center mb-4">
+                {insights.map((s, i) => <span key={i} className="px-3 py-1 rounded-lg bg-blue-100 text-blue-700 text-sm">{s}</span>)}
+              </div>
+            )}
+            <p className="text-xs text-slate-400 text-center mb-4">These would be added to your published skills, visible to your connections.</p>
+            <div className="flex gap-3">
+              <button onClick={onDecline} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">No thanks</button>
+              <button onClick={onAccept} className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">Add to My Profile</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // MANUAL ADD CONTACT MODAL
+    // ============================================
+    function ManualAddContactModal({ onAdd, onClose }) {
+      const [name, setName] = useState('');
+      const [email, setEmail] = useState('');
+      const [company, setCompany] = useState('');
+      const [position, setPosition] = useState('');
+      const [notes, setNotes] = useState('');
+      const [error, setError] = useState('');
+
+      const handleAdd = () => {
+        if (!name.trim()) { setError('Name is required'); return; }
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError('Invalid email format'); return; }
+        const nameParts = name.trim().split(/\s+/);
+        const firstName = nameParts[0] || '';
+        const lastName = nameParts.slice(1).join(' ') || '';
+        const inferred = (position || company) ? inferSkillsFromTitle(position, company) : { skills: [] };
+        const contact = {
+          id: 'manual-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6),
+          firstName, lastName, name: name.trim(),
+          company: company.trim(), position: position.trim(),
+          email: email.trim(), education: '',
+          personalNotes: notes.trim(), tier: 2,
+          inferred, enhanced: null, emailInsights: null,
+          nameConfidence: 'high', source: 'manual'
+        };
+        onAdd(contact);
+        onClose();
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Add New Contact</h3>
+            <p className="text-sm text-slate-500 mb-4">Manually add a contact to your network.</p>
+            {error && <div className="mb-3 p-2 rounded-lg bg-red-50 text-red-600 text-sm">{error}</div>}
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-medium text-slate-500 mb-1 block">Full Name *</label>
+                <input type="text" value={name} onChange={e => { setName(e.target.value); setError(''); }} placeholder="John Smith" className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" autoFocus />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-500 mb-1 block">Email</label>
+                <input type="email" value={email} onChange={e => { setEmail(e.target.value); setError(''); }} placeholder="john@example.com" className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+              </div>
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="text-xs font-medium text-slate-500 mb-1 block">Company</label>
+                  <input type="text" value={company} onChange={e => setCompany(e.target.value)} placeholder="Acme Inc." className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-medium text-slate-500 mb-1 block">Title / Role</label>
+                  <input type="text" value={position} onChange={e => setPosition(e.target.value)} placeholder="VP of Marketing" className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-500 mb-1 block">Notes</label>
+                <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="How do you know them? Any context..." className="w-full h-20 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+              <button onClick={handleAdd} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600 flex items-center justify-center gap-2">
+                <Icon name="UserPlus" size={14} /> Add Contact
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
     // MANUAL MERGE MODAL
     // ============================================
     function ManualMergeModal({ sourceContact, allContacts, onMerge, onClose }) {
@@ -865,6 +1420,11 @@
       const [inviteContact, setInviteContact] = useState(null);
       const [inviteLink, setInviteLink] = useState(null);
       const [showDedupeModal, setShowDedupeModal] = useState(false);
+      const [showManualAdd, setShowManualAdd] = useState(false);
+      const [showOnboarding, setShowOnboarding] = useState(false);
+      const [deleteConfirmContact, setDeleteConfirmContact] = useState(null);
+      const [selfAugmentSkills, setSelfAugmentSkills] = useState(null);
+      const [showMyProfile, setShowMyProfile] = useState(false);
       const [duplicateGroups, setDuplicateGroups] = useState([]);
       const [platformUserCache, setPlatformUserCache] = useState({});
       const [manualMergeContact, setManualMergeContact] = useState(null);
@@ -891,17 +1451,209 @@
       useEffect(() => {
         const ensureProfile = async () => {
           try {
-            const { data } = await supabase.from('user_profiles').select('id').eq('user_id', user.id).single();
+            const { data } = await supabase.from('user_profiles').select('id, published_skills, title, company').eq('user_id', user.id).single();
             if (!data) {
               await supabase.from('user_profiles').insert({
                 user_id: user.id,
                 email: user.email,
                 display_name: user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0]
               });
+              // New user — show onboarding
+              setShowOnboarding(true);
+            } else if (!data.published_skills && !data.title && !data.company) {
+              // Existing profile but empty — show onboarding
+              setShowOnboarding(true);
             }
           } catch (err) { /* profile may already exist from trigger */ }
         };
+
+        // Auto-connect: check for pending invitations where I'm the invitee
+        const processIncomingInvites = async () => {
+          try {
+            const { data: pendingInvites, error: invErr } = await supabase
+              .from('invitations')
+              .select('*')
+              .eq('invitee_email', user.email.toLowerCase())
+              .eq('status', 'pending');
+
+            console.log('[Auto-connect] Checking invitations for:', user.email.toLowerCase());
+            if (invErr) { console.warn('[Auto-connect] Query error:', invErr.message); return; }
+            console.log('[Auto-connect] Found pending invites:', pendingInvites?.length || 0);
+
+            if (!pendingInvites || pendingInvites.length === 0) return;
+
+            // Load current contacts
+            const { data: contactRow } = await supabase.from('contacts').select('contact_data').eq('user_id', user.id).single();
+            let myContacts = contactRow?.contact_data || [];
+            let added = 0;
+
+            for (const invite of pendingInvites) {
+              console.log('[Auto-connect] Processing invite from:', invite.inviter_name, invite.inviter_id);
+              
+              // Get inviter's profile using RPC (bypasses RLS)
+              const { data: inviterResults } = await supabase.rpc('check_platform_user', { contact_email: '' });
+              // Fallback: query with inviter_id directly
+              let inviterEmail = null;
+              let inviterName = invite.inviter_name || 'Unknown';
+              
+              // Try to get inviter's email from their user_profiles
+              const { data: inviterProfile, error: profErr } = await supabase
+                .from('user_profiles')
+                .select('user_id, email, display_name')
+                .eq('user_id', invite.inviter_id)
+                .single();
+              
+              if (inviterProfile) {
+                inviterEmail = inviterProfile.email;
+                inviterName = inviterProfile.display_name || inviterName;
+                console.log('[Auto-connect] Found inviter profile:', inviterName, inviterEmail);
+              } else {
+                console.warn('[Auto-connect] Could not find inviter profile, using invitation data. Error:', profErr?.message);
+                // Use whatever we have from the invitation record itself
+              }
+
+              // Also fetch inviter's full profile for skills/title/company
+              let inviterTitle = '', inviterCompany = '', inviterSkills = [];
+              if (inviterProfile) {
+                try {
+                  const { data: fullProfile } = await supabase
+                    .from('user_profiles')
+                    .select('title, company, published_skills')
+                    .eq('user_id', invite.inviter_id)
+                    .single();
+                  if (fullProfile) {
+                    inviterTitle = fullProfile.title || '';
+                    inviterCompany = fullProfile.company || '';
+                    inviterSkills = fullProfile.published_skills || [];
+                  }
+                } catch (e) { /* ignore */ }
+              }
+
+              // Check if inviter is already in my contacts
+              const alreadyExists = myContacts.some(c => {
+                if (inviterEmail && c.email?.toLowerCase() === inviterEmail.toLowerCase()) return true;
+                if (c.name?.toLowerCase() === inviterName.toLowerCase()) return true;
+                return false;
+              });
+
+              if (!alreadyExists) {
+                const inferredFromProfile = inviterSkills.length > 0 ? { skills: inviterSkills } : inferSkillsFromTitle(inviterTitle, inviterCompany);
+                myContacts.push({
+                  id: 'invite-' + invite.id + '-' + Date.now(),
+                  firstName: (inviterName || '').split(' ')[0] || '',
+                  lastName: (inviterName || '').split(' ').slice(1).join(' ') || '',
+                  name: inviterName,
+                  company: inviterCompany, position: inviterTitle,
+                  email: inviterEmail || '',
+                  education: '', personalNotes: 'Connected via platform invitation',
+                  tier: inviterSkills.length > 0 ? 3 : 2,
+                  inferred: inferredFromProfile,
+                  enhanced: inviterSkills.length > 0 ? { expertise: inviterSkills } : null,
+                  emailInsights: null,
+                  nameConfidence: 'high', source: 'invitation'
+                });
+                added++;
+                console.log('[Auto-connect] Added inviter as contact:', inviterName);
+              } else {
+                console.log('[Auto-connect] Inviter already in contacts, skipping');
+              }
+
+              // Mark invitation as accepted
+              const { error: updateErr } = await supabase.from('invitations').update({ status: 'accepted' }).eq('id', invite.id);
+              if (updateErr) console.warn('[Auto-connect] Failed to mark invite accepted:', updateErr.message);
+            }
+
+            if (added > 0) {
+              setContacts(myContacts);
+              await saveToSupabase(myContacts);
+              setStorageStatus('Auto-connected with ' + added + ' contact(s) who invited you!');
+              setTimeout(() => setStorageStatus(''), 4000);
+            }
+          } catch (err) { console.warn('[Auto-connect] Incoming invites failed:', err); }
+        };
+
+        // Auto-connect: check for accepted invitations where I'm the inviter
+        const processAcceptedInvites = async () => {
+          try {
+            const { data: acceptedInvites, error: invErr } = await supabase
+              .from('invitations')
+              .select('*')
+              .eq('inviter_id', user.id)
+              .eq('status', 'accepted');
+
+            if (invErr) { console.warn('[Auto-connect] Accepted query error:', invErr.message); return; }
+            if (!acceptedInvites || acceptedInvites.length === 0) return;
+
+            const { data: contactRow } = await supabase.from('contacts').select('contact_data').eq('user_id', user.id).single();
+            let myContacts = contactRow?.contact_data || [];
+            let added = 0;
+            const cacheUpdates = {};
+
+            for (const invite of acceptedInvites) {
+              const inviteeEmail = invite.invitee_email?.toLowerCase();
+              if (inviteeEmail) {
+                // Check if invitee is already in contacts
+                const existingIndex = myContacts.findIndex(c =>
+                  c.email?.toLowerCase() === inviteeEmail
+                );
+                
+                if (existingIndex >= 0) {
+                  // Already in contacts — just refresh the platform cache so the icon shows
+                  console.log('[Auto-connect] Invitee already in contacts, refreshing platform status:', inviteeEmail);
+                  try {
+                    const { data } = await supabase.rpc('check_platform_user', { contact_email: inviteeEmail });
+                    if (data?.[0]) {
+                      cacheUpdates[inviteeEmail] = data[0];
+                    }
+                  } catch (err) { /* ignore */ }
+                } else {
+                  myContacts.push({
+                    id: 'invite-accepted-' + invite.id + '-' + Date.now(),
+                    firstName: (invite.invitee_name || '').split(' ')[0] || '',
+                    lastName: (invite.invitee_name || '').split(' ').slice(1).join(' ') || '',
+                    name: invite.invitee_name || inviteeEmail.split('@')[0],
+                    company: '', position: '',
+                    email: inviteeEmail,
+                    education: '', personalNotes: 'Joined via your invitation',
+                    tier: 2, inferred: { skills: [] }, enhanced: null, emailInsights: null,
+                    nameConfidence: 'high', source: 'invitation'
+                  });
+                  added++;
+                }
+              }
+
+              // Mark as completed
+              await supabase.from('invitations').update({ status: 'completed' }).eq('id', invite.id);
+            }
+
+            // Update platform user cache for newly-joined invitees
+            if (Object.keys(cacheUpdates).length > 0) {
+              setPlatformUserCache(prev => ({ ...prev, ...cacheUpdates }));
+            }
+
+            if (added > 0) {
+              setContacts(prev => {
+                const merged = [...prev];
+                myContacts.filter(c => c.source === 'invitation').forEach(ic => {
+                  if (!merged.some(m => m.email?.toLowerCase() === ic.email?.toLowerCase())) {
+                    merged.push(ic);
+                  }
+                });
+                saveToSupabase(merged);
+                return merged;
+              });
+              setStorageStatus(added + ' invited contact(s) joined the platform!');
+              setTimeout(() => setStorageStatus(''), 4000);
+            } else if (Object.keys(cacheUpdates).length > 0) {
+              setStorageStatus('Platform status updated for your contacts');
+              setTimeout(() => setStorageStatus(''), 3000);
+            }
+          } catch (err) { console.warn('[Auto-connect] Accepted invites failed:', err); }
+        };
+
         ensureProfile();
+        // Run auto-connect after a short delay to let contacts load first
+        setTimeout(() => { processIncomingInvites(); processAcceptedInvites(); }, 2000);
       }, [user.id]);
 
       // Load notifications
@@ -951,6 +1703,91 @@
       };
 
       const handleSave = () => saveToSupabase(contacts);
+
+      // Bulk check which contacts are on the platform (for icon display + profile sync)
+      useEffect(() => {
+        if (contacts.length === 0) return;
+        const checkBatch = async () => {
+          const uncheckedEmails = contacts
+            .filter(c => c.email && platformUserCache[c.email.toLowerCase()] === undefined)
+            .map(c => c.email.toLowerCase());
+          // Dedupe and limit to avoid hammering the API
+          const unique = [...new Set(uncheckedEmails)].slice(0, 50);
+          if (unique.length === 0) return;
+          const newCache = { ...platformUserCache };
+          for (const email of unique) {
+            try {
+              const { data } = await supabase.rpc('check_platform_user', { contact_email: email });
+              newCache[email] = data?.[0] || null;
+            } catch (err) { newCache[email] = null; }
+          }
+          setPlatformUserCache(newCache);
+
+          // Sync profile data for platform contacts
+          const platformEmails = Object.entries(newCache)
+            .filter(([_, v]) => v?.found_user_id)
+            .map(([email]) => email);
+          if (platformEmails.length === 0) return;
+
+          let needsSave = false;
+          const updatedContacts = contacts.map(c => {
+            const email = c.email?.toLowerCase();
+            if (!email || !newCache[email]?.found_user_id) return c;
+            // Fetch their latest profile
+            return c; // placeholder, actual sync below
+          });
+
+          // Do async profile lookups
+          const profileUpdates = {};
+          for (const email of platformEmails) {
+            try {
+              const { data: prof } = await supabase
+                .from('user_profiles')
+                .select('display_name, title, company, published_skills')
+                .eq('email', email)
+                .single();
+              if (prof) profileUpdates[email] = prof;
+            } catch (err) { /* ignore */ }
+          }
+
+          if (Object.keys(profileUpdates).length === 0) return;
+
+          const syncedContacts = contacts.map(c => {
+            const email = c.email?.toLowerCase();
+            const prof = email && profileUpdates[email];
+            if (!prof) return c;
+            // Only update if profile has richer data
+            const updated = { ...c };
+            if (prof.title && !c.position) { updated.position = prof.title; needsSave = true; }
+            if (prof.company && !c.company) { updated.company = prof.company; needsSave = true; }
+            if (prof.display_name && (!c.name || c.name === c.email?.split('@')[0])) { 
+              updated.name = prof.display_name;
+              updated.firstName = prof.display_name.split(' ')[0] || '';
+              updated.lastName = prof.display_name.split(' ').slice(1).join(' ') || '';
+              needsSave = true;
+            }
+            if (prof.published_skills?.length > 0) {
+              const existingSkills = updated.enhanced?.expertise || updated.inferred?.skills || [];
+              const newSkills = [...new Set([...existingSkills, ...prof.published_skills])];
+              if (newSkills.length > existingSkills.length) {
+                updated.enhanced = { ...(updated.enhanced || {}), expertise: newSkills };
+                updated.tier = 3;
+                needsSave = true;
+              }
+            }
+            return updated;
+          });
+
+          if (needsSave) {
+            setContacts(syncedContacts);
+            await saveToSupabase(syncedContacts);
+            console.log('[Profile sync] Updated contact cards from platform profiles');
+          }
+        };
+        // Delay to let contacts settle first
+        const timer = setTimeout(checkBatch, 3000);
+        return () => clearTimeout(timer);
+      }, [contacts.length]);
 
       // File upload (LinkedIn CSV)
       const handleFileUpload = (event) => {
@@ -1070,8 +1907,8 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               model: 'claude-sonnet-4-20250514',
-              max_tokens: 1000,
-              messages: [{ role: 'user', content: 'Analyze these email exchanges between ME (the user, ' + user.email + ') and my CONTACT named ' + contact.name + '.\n\nIMPORTANT: I want to learn about the CONTACT (' + contact.name + '), NOT about me. Only extract information that describes the CONTACT\'s skills, expertise, job, interests, and background. Do NOT attribute my skills or activities to the contact.\n\nEmails:\n' + emailContent + '\n\nReturn JSON only with information ABOUT THE CONTACT (' + contact.name + '):\n{ "expertiseSignals": ["list skills/expertise/job role OF THE CONTACT only"], "projectsMentioned": [], "problemsSolved": [], "communicationStyle": "", "relationshipStrength": "strong/moderate/weak", "keyInsights": "brief summary of who the CONTACT is and what they do" }' }]
+              max_tokens: 1500,
+              messages: [{ role: 'user', content: 'Analyze these email exchanges between ME (the user, ' + user.email + ') and my CONTACT named ' + contact.name + '.\n\nIMPORTANT: I want to learn about the CONTACT (' + contact.name + '), NOT about me. Only extract information that describes the CONTACT\'s skills, expertise, job, interests, and background. Do NOT attribute my skills or activities to the contact.\n\nAlso analyze the email metadata:\n- What is the date of the most recent email?\n- Count how many emails were exchanged (each direction counts as 1) in the most recent 3 months.\n- Additionally, identify any skills/expertise that apply to ME (the user, ' + user.email + ') based on what I discuss in these emails.\n\nEmails:\n' + emailContent + '\n\nReturn JSON only:\n{ "expertiseSignals": ["skills of THE CONTACT only"], "projectsMentioned": [], "problemsSolved": [], "communicationStyle": "", "relationshipStrength": "strong/moderate/weak", "keyInsights": "brief summary of who the CONTACT is", "lastContactDate": "YYYY-MM-DD or null if unclear", "emailFrequency3mo": 0, "mySkills": ["skills/expertise that apply to ME the user, based on what I discuss"] }' }]
             })
           });
           const data = await response.json();
@@ -1079,11 +1916,18 @@
           const jsonMatch = textContent.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
             const insights = JSON.parse(jsonMatch[0]);
-            const updatedContacts = contacts.map(c => c.id === contact.id ? { ...c, emailInsights: insights } : c);
+            const mySkills = insights.mySkills || [];
+            delete insights.mySkills; // Don't store on the contact
+            const updatedContacts = contacts.map(c => c.id === contact.id ? { ...c, emailInsights: insights, lastContactDate: insights.lastContactDate || null, emailFrequency3mo: insights.emailFrequency3mo || 0 } : c);
             setContacts(updatedContacts);
-            if (selectedContact?.id === contact.id) setSelectedContact(prev => ({ ...prev, emailInsights: insights }));
+            if (selectedContact?.id === contact.id) setSelectedContact(prev => ({ ...prev, emailInsights: insights, lastContactDate: insights.lastContactDate || null, emailFrequency3mo: insights.emailFrequency3mo || 0 }));
             await saveToSupabase(updatedContacts);
             setStorageStatus('Email insights saved!');
+            
+            // Ask about self-profile augmentation if skills found
+            if (mySkills.length > 0) {
+              setTimeout(() => setSelfAugmentSkills(mySkills), 500);
+            }
           }
           setTimeout(() => setStorageStatus(''), 3000);
         } catch (error) {
@@ -1281,13 +2125,49 @@
             personalNotes: c.personalNotes || '',
             interests: c.enhanced?.personalInterests || []
           }));
+
+          // 2nd degree: search through platform contacts' contact lists
+          let secondDegreeResults = [];
+          const platformContacts = contacts
+            .filter(c => c.email && (c.source === 'invitation' || platformUserCache[c.email?.toLowerCase()]?.found_user_id))
+            .map(c => ({ name: c.name, email: c.email.toLowerCase(), userId: platformUserCache[c.email?.toLowerCase()]?.found_user_id }))
+            .filter(c => c.userId);
+          
+          if (platformContacts.length > 0) {
+            const queryWords = expertiseQuery.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+            if (queryWords.length === 0) queryWords.push(expertiseQuery.toLowerCase());
+            
+            for (const pc of platformContacts) {
+              try {
+                const { data: matchedContacts } = await supabase.rpc('search_contacts_of_user', {
+                  owner_user_id: pc.userId,
+                  search_terms: queryWords
+                });
+                if (matchedContacts && matchedContacts.length > 0) {
+                  for (const mc of matchedContacts) {
+                    secondDegreeResults.push({
+                      name: 'A contact of ' + pc.name,
+                      relevance: 'medium',
+                      reason: 'Matched skills: ' + (mc.matched_skills || []).join(', '),
+                      degree: 2,
+                      viaContact: pc.name,
+                      viaContactUserId: pc.userId,
+                      viaContactEmail: pc.email,
+                      matchedContactName: mc.contact_name
+                    });
+                  }
+                }
+              } catch (err) { console.warn('2nd degree search failed for', pc.name, err); }
+            }
+          }
+
           const response = await fetch(ANTHROPIC_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               model: 'claude-sonnet-4-20250514',
-              max_tokens: 1000,
-              messages: [{ role: 'user', content: 'Find contacts who know about: "' + expertiseQuery + '"\n\nContacts: ' + JSON.stringify(summaries) + '\n\nReturn JSON only, sorted from highest to lowest relevance: { "matches": [{ "name": "", "relevance": "high" or "medium" or "low" (lowercase only), "reason": "", "approachSuggestion": "" }] }. List high relevance matches first, then medium, then low.' }]
+              max_tokens: 2500,
+              messages: [{ role: 'user', content: 'Find contacts who know about: "' + expertiseQuery + '"\n\nContacts: ' + JSON.stringify(summaries) + '\n\nReturn ONLY a JSON object. Keep reasons brief (under 20 words). Format: { "matches": [{ "name": "", "relevance": "high" or "medium" or "low", "reason": "", "approachSuggestion": "" }] }. If no contacts match, return { "matches": [] }.' }]
             })
           });
           const data = await response.json();
@@ -1301,7 +2181,13 @@
               parsed.matches.forEach(m => { m.relevance = (m.relevance || 'low').toLowerCase(); });
               parsed.matches.sort((a, b) => (relevanceOrder[a.relevance] ?? 2) - (relevanceOrder[b.relevance] ?? 2));
             }
+            // Append 2nd degree results
+            if (secondDegreeResults.length > 0) {
+              parsed.matches = [...(parsed.matches || []), ...secondDegreeResults];
+            }
             setExpertResults(parsed);
+          } else {
+            setExpertResults({ matches: secondDegreeResults });
           }
         } catch (error) {
           setStorageStatus('Search failed: ' + error.message);
@@ -1333,7 +2219,7 @@
         } catch (err) { console.error('Failed to load all messages:', err); }
       };
 
-      const sendNoteToContact = async (recipientUserId, message) => {
+      const sendNoteToContact = async (recipientUserId, message, recipientInfo) => {
         try {
           const displayName = user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0];
           await supabase.from('notifications').insert({
@@ -1344,17 +2230,18 @@
             message
           });
 
-          // Also send email notification if we have the contact's email
-          const contact = sendNoteContact;
-          if (contact?.email) {
+          // Send email notification if we have recipient's email
+          const recipientEmail = recipientInfo?.email || sendNoteContact?.email;
+          const recipientName = recipientInfo?.name || sendNoteContact?.name;
+          if (recipientEmail) {
             try {
               await fetch('/.netlify/functions/send-email', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   type: 'note',
-                  to: contact.email,
-                  toName: contact.name,
+                  to: recipientEmail,
+                  toName: recipientName,
                   senderName: displayName,
                   senderEmail: user.email,
                   message
@@ -1398,13 +2285,13 @@
           const { data, error } = await supabase.from('invitations').insert({
             inviter_id: user.id,
             inviter_name: displayName,
-            invitee_email: contact.email || '',
+            invitee_email: (contact.email || '').toLowerCase(),
             invitee_name: contact.name,
             status: 'pending'
           }).select().single();
           if (error) throw error;
           const baseUrl = window.location.origin;
-          const link = baseUrl + '/?ref=' + encodeURIComponent(displayName);
+          const link = baseUrl + '/?invite=' + data.id + '&ref=' + encodeURIComponent(displayName);
           setInviteLink(link);
           return link;
         } catch (err) {
@@ -1480,6 +2367,42 @@
         setTimeout(() => setStorageStatus(''), 4000);
       };
 
+      // ====== Manual Add Contact ======
+      const handleManualAddContact = async (contact) => {
+        const updatedContacts = [...contacts, contact];
+        setContacts(updatedContacts);
+        await saveToSupabase(updatedContacts);
+        setStorageStatus('Added "' + contact.name + '" to your contacts');
+        setTimeout(() => setStorageStatus(''), 3000);
+      };
+
+      // ====== Delete Contact ======
+      const deleteContact = async (contact) => {
+        const updatedContacts = contacts.filter(c => c.id !== contact.id);
+        setContacts(updatedContacts);
+        if (selectedContact?.id === contact.id) setSelectedContact(null);
+        selectedIds.delete(contact.id);
+        setSelectedIds(new Set(selectedIds));
+        await saveToSupabase(updatedContacts);
+        setDeleteConfirmContact(null);
+        setStorageStatus('Deleted "' + contact.name + '"');
+        setTimeout(() => setStorageStatus(''), 3000);
+      };
+
+      // ====== Self Profile Augment ======
+      const acceptSelfAugment = async () => {
+        if (!selfAugmentSkills || selfAugmentSkills.length === 0) { setSelfAugmentSkills(null); return; }
+        try {
+          const { data: profile } = await supabase.from('user_profiles').select('published_skills').eq('user_id', user.id).single();
+          const existing = profile?.published_skills || [];
+          const merged = [...new Set([...existing, ...selfAugmentSkills])];
+          await supabase.from('user_profiles').update({ published_skills: merged }).eq('user_id', user.id);
+          setStorageStatus('Added ' + selfAugmentSkills.length + ' skill(s) to your profile!');
+          setTimeout(() => setStorageStatus(''), 3000);
+        } catch (err) { console.error('Self-augment failed:', err); }
+        setSelfAugmentSkills(null);
+      };
+
       // Filtered and sorted contacts
       const filteredContacts = useMemo(() => {
         return contacts.filter(c => {
@@ -1547,7 +2470,7 @@
                         <span className="absolute -top-0.5 -right-0.5 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center font-medium">{notifications.length}</span>
                       )}
                     </button>
-                    {showNotifications && <NotificationPanel notifications={notifications} allMessages={allMessages} onMarkRead={markNotificationRead} onDelete={deleteNotification} onClose={() => setShowNotifications(false)} onLoadAll={loadAllMessages} />}
+                    {showNotifications && <NotificationPanel notifications={notifications} allMessages={allMessages} onMarkRead={markNotificationRead} onDelete={deleteNotification} onClose={() => setShowNotifications(false)} onLoadAll={loadAllMessages} onReply={sendNoteToContact} />}
                   </div>
                   
                   {!isGoogleConnected ? (
@@ -1578,7 +2501,12 @@
                   </label>
 
                   <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
-                    <span className="text-xs text-slate-500">{user.email}</span>
+                    <button onClick={() => setShowMyProfile(true)} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-amber-50 text-sm text-slate-600 hover:text-amber-700 transition-colors" title="My Profile">
+                      <div className="w-6 h-6 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white text-xs font-bold">
+                        {(user.user_metadata?.full_name || user.email)?.[0]?.toUpperCase()}
+                      </div>
+                      <span className="text-xs hidden sm:inline">{user.user_metadata?.full_name || user.email.split('@')[0]}</span>
+                    </button>
                     <button onClick={onLogout} className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50" title="Sign out">
                       <Icon name="LogOut" size={16} />
                     </button>
@@ -1601,7 +2529,7 @@
                   Search
                 </button>
               </div>
-              {expertResults?.matches?.length > 0 && (
+              {expertResults && (
                 <div className="mt-4 p-4 bg-white/10 rounded-xl">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-white/90 font-medium">Results:</h3>
@@ -1609,7 +2537,14 @@
                       <Icon name="X" size={12} /> Clear
                     </button>
                   </div>
-                  {expertResults.matches.map((match, idx) => {
+                  {(!expertResults.matches || expertResults.matches.length === 0) ? (
+                    <div className="bg-white/90 rounded-lg p-4 text-center">
+                      <Icon name="SearchX" size={24} className="text-slate-400 mx-auto mb-2" />
+                      <p className="text-sm text-slate-600 font-medium">No matches found</p>
+                      <p className="text-xs text-slate-400 mt-1">Try different keywords, enhance your contacts, or grow your network by inviting more people.</p>
+                    </div>
+                  ) : (
+                  expertResults.matches.map((match, idx) => {
                     const matchedContact = contacts.find(c => c.name.toLowerCase() === match.name.toLowerCase());
                     const isSecondDegree = match.degree === 2;
                     return (
@@ -1628,7 +2563,36 @@
                         <p className="text-sm text-slate-600 mt-1">{match.reason}</p>
                         {isSecondDegree && (
                           <div className="mt-2 flex items-center gap-2">
-                            <button onClick={(e) => { e.stopPropagation(); /* TODO: Request intro flow */ setStorageStatus('Intro request feature coming soon'); setTimeout(() => setStorageStatus(''), 3000); }} className="px-3 py-1.5 rounded-lg bg-purple-100 text-purple-700 text-xs font-medium hover:bg-purple-200 flex items-center gap-1">
+                            <button onClick={async (e) => { 
+                              e.stopPropagation(); 
+                              if (match.viaContactUserId) {
+                                const displayName = user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0];
+                                const introMsg = 'Hi! I\'m looking for someone with expertise in "' + expertiseQuery + '". I believe your contact ' + (match.matchedContactName || 'someone in your network') + ' might be a great match. Would you be willing to introduce us?';
+                                try {
+                                  await supabase.from('notifications').insert({
+                                    sender_id: user.id,
+                                    recipient_id: match.viaContactUserId,
+                                    sender_name: displayName,
+                                    sender_email: user.email,
+                                    message: introMsg
+                                  });
+                                  // Also send email
+                                  if (match.viaContactEmail) {
+                                    try {
+                                      await fetch('/.netlify/functions/send-email', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ type: 'note', to: match.viaContactEmail, toName: match.viaContact, senderName: displayName, senderEmail: user.email, message: introMsg })
+                                      });
+                                    } catch (emailErr) { /* ignore email failure */ }
+                                  }
+                                  setStorageStatus('Intro request sent to ' + match.viaContact + '!');
+                                } catch (err) { setStorageStatus('Failed to send request: ' + err.message); }
+                              } else {
+                                setStorageStatus('Unable to message — contact not on platform');
+                              }
+                              setTimeout(() => setStorageStatus(''), 3000);
+                            }} className="px-3 py-1.5 rounded-lg bg-purple-100 text-purple-700 text-xs font-medium hover:bg-purple-200 flex items-center gap-1">
                               <Icon name="MessageSquare" size={12} /> Request Intro
                             </button>
                             <span className="text-xs text-slate-400">Ask your contact to connect you</span>
@@ -1636,7 +2600,8 @@
                         )}
                       </div>
                     );
-                  })}
+                  })
+                  )}
                 </div>
               )}
             </div>
@@ -1685,6 +2650,9 @@
                 <button onClick={runDedupe} className="px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 text-sm text-purple-700 hover:bg-purple-100 flex items-center gap-2 ml-auto">
                   <Icon name="GitMerge" size={14} /> Find Duplicates
                 </button>
+                <button onClick={() => setShowManualAdd(true)} className="px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-sm text-emerald-700 hover:bg-emerald-100 flex items-center gap-2">
+                  <Icon name="UserPlus" size={14} /> Add Contact
+                </button>
               </div>
               {selectedIds.size > 0 && !bulkProgress && (
                 <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-50 border border-amber-200 flex-wrap">
@@ -1714,11 +2682,21 @@
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-start gap-3">
                         <input type="checkbox" checked={selectedIds.has(contact.id)} onChange={(e) => toggleSelect(contact.id, e)} onClick={(e) => e.stopPropagation()} className="mt-1 w-4 h-4 rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer" />
-                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center text-slate-500 font-semibold text-lg">
-                          {contact.firstName?.[0]}{contact.lastName?.[0]}
+                        <div className="relative">
+                          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center text-slate-500 font-semibold text-lg">
+                            {contact.firstName?.[0]}{contact.lastName?.[0]}
+                          </div>
+                          {(contact.source === 'invitation' || platformUserCache[contact.email?.toLowerCase()]?.found_user_id) && (
+                            <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center ring-2 ring-white" title="On platform">
+                              <Icon name="Check" size={10} className="text-white" />
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div className="flex flex-col items-end gap-1">
+                        <button onClick={(e) => { e.stopPropagation(); setDeleteConfirmContact(contact); }} className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-50 text-slate-300 hover:text-red-500 transition-all" title="Delete contact">
+                          <Icon name="Trash2" size={13} />
+                        </button>
                         {getTierBadge(contact.tier)}
                         {getConfidenceBadge(contact.nameConfidence)}
                         {contact.emailInsights && (
@@ -1753,13 +2731,19 @@
                       <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase hidden md:table-cell">Company</th>
                       <th className="px-3 py-3 text-left text-xs font-semibold text-slate-500 uppercase hidden lg:table-cell">Email</th>
                       <th className="px-3 py-3 text-center text-xs font-semibold text-slate-500 uppercase w-24">Status</th>
+                      <th className="px-3 py-3 w-10"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {filteredContacts.map(contact => (
                       <tr key={contact.id} onClick={() => { setSelectedContact(contact); setActiveTab('profile'); setEditingEmail(false); setNewSkillInput(''); }} className={"hover:bg-slate-50 cursor-pointer " + (selectedIds.has(contact.id) ? 'bg-amber-50' : '')}>
                         <td className="px-3 py-2"><input type="checkbox" checked={selectedIds.has(contact.id)} onChange={(e) => toggleSelect(contact.id, e)} onClick={(e) => e.stopPropagation()} className="w-4 h-4 rounded" /></td>
-                        <td className="px-3 py-2"><span className="font-medium text-slate-800">{contact.name}</span></td>
+                        <td className="px-3 py-2">
+                          <span className="font-medium text-slate-800">{contact.name}</span>
+                          {(contact.source === 'invitation' || platformUserCache[contact.email?.toLowerCase()]?.found_user_id) && (
+                            <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-emerald-500 align-middle" title="On platform"><Icon name="Check" size={9} className="text-white" /></span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-sm text-slate-600 hidden md:table-cell">{contact.company || '\u2014'}</td>
                         <td className="px-3 py-2 text-sm text-slate-400 hidden lg:table-cell truncate max-w-[200px]">{contact.email || '\u2014'}</td>
                         <td className="px-3 py-2">
@@ -1767,6 +2751,11 @@
                             {contact.tier === 3 ? <span className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center"><Icon name="Sparkles" size={12} className="text-emerald-600" /></span> : <span className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center"><Icon name="Circle" size={12} className="text-slate-400" /></span>}
                             {contact.emailInsights ? <span className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center"><Icon name="Mail" size={12} className="text-blue-600" /></span> : <span className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center"><Icon name="MailX" size={12} className="text-slate-400" /></span>}
                           </div>
+                        </td>
+                        <td className="px-3 py-2">
+                          <button onClick={(e) => { e.stopPropagation(); setDeleteConfirmContact(contact); }} className="p-1 rounded hover:bg-red-50 text-slate-300 hover:text-red-500" title="Delete">
+                            <Icon name="Trash2" size={14} />
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -1788,7 +2777,7 @@
                         {selectedContact.firstName?.[0]}{selectedContact.lastName?.[0]}
                       </div>
                       <div>
-                        <div className="flex items-center gap-2 mb-1 flex-wrap"><h2 className="text-xl font-bold text-slate-800">{selectedContact.name}</h2>{getTierBadge(selectedContact.tier)}</div>
+                        <div className="flex items-center gap-2 mb-1 flex-wrap"><h2 className="text-xl font-bold text-slate-800">{selectedContact.name}</h2>{(selectedContact.source === 'invitation' || platformUserCache[selectedContact.email?.toLowerCase()]?.found_user_id) && (<span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium"><Icon name="Check" size={10} /> On Platform</span>)}{getTierBadge(selectedContact.tier)}</div>
                         <p className="text-slate-600">{selectedContact.position}</p>
                         <p className="text-slate-500 text-sm">{selectedContact.company}</p>
                         {/* Feature #1 & #2: Email display + edit */}
@@ -1825,6 +2814,10 @@
                       {/* Manual Merge */}
                       <button onClick={() => setManualMergeContact(selectedContact)} className="p-2 hover:bg-purple-50 rounded-lg text-slate-400 hover:text-purple-500" title="Merge with another contact">
                         <Icon name="GitMerge" size={18} />
+                      </button>
+                      {/* Delete */}
+                      <button onClick={() => setDeleteConfirmContact(selectedContact)} className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500" title="Delete contact">
+                        <Icon name="Trash2" size={18} />
                       </button>
                       <button onClick={() => { setSelectedContact(null); setEditingEmail(false); setNewSkillInput(''); }} className="p-2 hover:bg-slate-100 rounded-lg"><Icon name="X" size={20} className="text-slate-400" /></button>
                     </div>
@@ -1875,6 +2868,26 @@
                               {selectedContact.emailInsights.expertiseSignals.map((s, i) => <span key={i} className="px-2 py-1 rounded bg-blue-100 text-blue-800 text-xs">{s}</span>)}
                             </div>
                           )}
+                          <div className="flex items-center gap-4 mt-3 pt-3 border-t border-blue-100">
+                            {(selectedContact.lastContactDate || selectedContact.emailInsights?.lastContactDate) && (
+                              <div className="flex items-center gap-1.5 text-xs text-blue-600">
+                                <Icon name="Calendar" size={12} />
+                                <span>Last contact: {selectedContact.lastContactDate || selectedContact.emailInsights.lastContactDate}</span>
+                              </div>
+                            )}
+                            {(selectedContact.emailFrequency3mo > 0 || selectedContact.emailInsights?.emailFrequency3mo > 0) && (
+                              <div className="flex items-center gap-1.5 text-xs text-blue-600">
+                                <Icon name="BarChart3" size={12} />
+                                <span>{selectedContact.emailFrequency3mo || selectedContact.emailInsights.emailFrequency3mo} emails (last 3mo)</span>
+                              </div>
+                            )}
+                            {selectedContact.emailInsights?.relationshipStrength && (
+                              <div className="flex items-center gap-1.5 text-xs text-blue-600">
+                                <Icon name="Heart" size={12} />
+                                <span>{selectedContact.emailInsights.relationshipStrength}</span>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       )}
                       <div className="mb-6 p-4 rounded-xl bg-slate-50 border border-slate-200">
@@ -1957,6 +2970,13 @@
             />
           )}
 
+          {showManualAdd && (
+            <ManualAddContactModal
+              onAdd={handleManualAddContact}
+              onClose={() => setShowManualAdd(false)}
+            />
+          )}
+
           {showDedupeModal && duplicateGroups.length > 0 && (
             <DedupeModal
               groups={duplicateGroups}
@@ -1971,6 +2991,38 @@
               allContacts={contacts}
               onMerge={handleManualMerge}
               onClose={() => setManualMergeContact(null)}
+            />
+          )}
+
+          {showOnboarding && (
+            <OnboardingModal
+              user={user}
+              supabase={supabase}
+              onComplete={() => setShowOnboarding(false)}
+            />
+          )}
+
+          {deleteConfirmContact && (
+            <DeleteConfirmModal
+              contact={deleteConfirmContact}
+              onConfirm={deleteContact}
+              onClose={() => setDeleteConfirmContact(null)}
+            />
+          )}
+
+          {selfAugmentSkills && (
+            <SelfAugmentPrompt
+              insights={selfAugmentSkills}
+              onAccept={acceptSelfAugment}
+              onDecline={() => setSelfAugmentSkills(null)}
+            />
+          )}
+
+          {showMyProfile && (
+            <MyProfileModal
+              user={user}
+              supabase={supabase}
+              onClose={() => setShowMyProfile(false)}
             />
           )}
         </div>

@@ -337,6 +337,13 @@
     function LoginScreen({ supabase }) {
       const [isLoading, setIsLoading] = useState(false);
       const [error, setError] = useState(null);
+      const [mode, setMode] = useState('login'); // 'login' | 'signup'
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [firstName, setFirstName] = useState('');
+      const [lastName, setLastName] = useState('');
+      const [confirmPassword, setConfirmPassword] = useState('');
+      const [successMsg, setSuccessMsg] = useState('');
 
       const handleGoogleLogin = async () => {
         setIsLoading(true);
@@ -353,6 +360,50 @@
         }
       };
 
+      const validatePassword = (pw) => {
+        if (pw.length < 8) return 'Password must be at least 8 characters';
+        if (!/[^a-zA-Z0-9]/.test(pw)) return 'Password must include at least one special character';
+        return null;
+      };
+
+      const handleEmailAuth = async (e) => {
+        e.preventDefault();
+        setError(null);
+        setSuccessMsg('');
+
+        if (mode === 'signup') {
+          if (!firstName.trim()) { setError('First name is required'); return; }
+          const pwErr = validatePassword(password);
+          if (pwErr) { setError(pwErr); return; }
+          if (password !== confirmPassword) { setError('Passwords do not match'); return; }
+        }
+
+        setIsLoading(true);
+        try {
+          if (mode === 'signup') {
+            const { data, error } = await supabase.auth.signUp({
+              email,
+              password,
+              options: {
+                data: { full_name: (firstName.trim() + ' ' + lastName.trim()).trim(), name: (firstName.trim() + ' ' + lastName.trim()).trim() }
+              }
+            });
+            if (error) throw error;
+            if (data?.user?.identities?.length === 0) {
+              setError('An account with this email already exists. Try signing in instead.');
+            } else {
+              setSuccessMsg('Account created! Check your email to confirm, then sign in.');
+              setMode('login');
+            }
+          } else {
+            const { error } = await supabase.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+          }
+        } catch (err) {
+          setError(err.message);
+        } finally { setIsLoading(false); }
+      };
+
       return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-amber-50/30 flex items-center justify-center p-4">
           <div className="max-w-md w-full">
@@ -364,8 +415,9 @@
               <p className="text-slate-600">Discover who in your network has the expertise you need</p>
             </div>
             <div className="bg-white rounded-2xl shadow-xl p-8 border border-slate-200">
-              <h2 className="text-xl font-semibold text-slate-800 mb-6 text-center">Sign in to continue</h2>
+              <h2 className="text-xl font-semibold text-slate-800 mb-6 text-center">{mode === 'signup' ? 'Create your account' : 'Sign in to continue'}</h2>
               {error && <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">{error}</div>}
+              {successMsg && <div className="mb-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm">{successMsg}</div>}
               <button onClick={handleGoogleLogin} disabled={isLoading} className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-all disabled:opacity-50">
                 <svg className="w-5 h-5" viewBox="0 0 24 24">
                   <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -373,9 +425,40 @@
                   <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
                   <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
                 </svg>
-                <span className="font-medium text-slate-700">{isLoading ? 'Signing in...' : 'Continue with Google'}</span>
+                <span className="font-medium text-slate-700">Continue with Google</span>
               </button>
-              <p className="mt-6 text-xs text-slate-500 text-center">Your contacts are stored securely and only accessible by you.</p>
+              <div className="flex items-center gap-3 my-5">
+                <div className="flex-1 h-px bg-slate-200"></div>
+                <span className="text-xs text-slate-400 font-medium">OR</span>
+                <div className="flex-1 h-px bg-slate-200"></div>
+              </div>
+              <form onSubmit={handleEmailAuth} className="space-y-3">
+                {mode === 'signup' && (
+                  <div className="flex gap-3">
+                    <input type="text" placeholder="First name *" value={firstName} onChange={e => setFirstName(e.target.value)} className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-300" />
+                    <input type="text" placeholder="Last name" value={lastName} onChange={e => setLastName(e.target.value)} className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-300" />
+                  </div>
+                )}
+                <input type="email" placeholder="Email address" value={email} onChange={e => setEmail(e.target.value)} required className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-300" />
+                <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-300" />
+                {mode === 'signup' && (
+                  <div>
+                    <input type="password" placeholder="Confirm password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-300" />
+                    <p className="text-xs text-slate-400 mt-1.5 ml-1">Min 8 characters, at least one special character</p>
+                  </div>
+                )}
+                <button type="submit" disabled={isLoading} className="w-full px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-medium hover:from-amber-600 hover:to-orange-600 disabled:opacity-50 text-sm">
+                  {isLoading ? 'Please wait...' : mode === 'signup' ? 'Create Account' : 'Sign In'}
+                </button>
+              </form>
+              <p className="mt-4 text-sm text-center text-slate-500">
+                {mode === 'login' ? (
+                  <>Don't have an account? <button onClick={() => { setMode('signup'); setError(null); setSuccessMsg(''); }} className="text-amber-600 font-medium hover:text-amber-700">Sign up</button></>
+                ) : (
+                  <>Already have an account? <button onClick={() => { setMode('login'); setError(null); setSuccessMsg(''); }} className="text-amber-600 font-medium hover:text-amber-700">Sign in</button></>
+                )}
+              </p>
+              <p className="mt-4 text-xs text-slate-500 text-center">Your contacts are stored securely and only accessible by you.</p>
             </div>
             <div className="mt-8 text-center">
               <h3 className="font-semibold text-slate-700 mb-3">What you can do:</h3>
@@ -394,14 +477,26 @@
     // ============================================
     // NOTIFICATION PANEL
     // ============================================
-    function NotificationPanel({ notifications, allMessages, onMarkRead, onDelete, onClose, onLoadAll }) {
+    function NotificationPanel({ notifications, allMessages, onMarkRead, onDelete, onClose, onLoadAll, onReply }) {
       const [tab, setTab] = useState('unread');
+      const [replyTo, setReplyTo] = useState(null);
+      const [replyMessage, setReplyMessage] = useState('');
+      const [sending, setSending] = useState(false);
       const displayList = tab === 'unread' ? notifications : allMessages;
 
       // Load all messages when switching to All tab
       const switchTab = (t) => {
         setTab(t);
         if (t === 'all' && onLoadAll) onLoadAll();
+      };
+
+      const handleReply = async () => {
+        if (!replyMessage.trim() || !replyTo) return;
+        setSending(true);
+        await onReply(replyTo.sender_id, replyMessage.trim(), { email: replyTo.sender_email, name: replyTo.sender_name });
+        setSending(false);
+        setReplyTo(null);
+        setReplyMessage('');
       };
 
       return (
@@ -431,7 +526,25 @@
                         {!n.read && <span className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0"></span>}
                       </div>
                       <p className="text-sm text-slate-600 mt-1">{n.message}</p>
-                      <p className="text-xs text-slate-400 mt-1">{new Date(n.created_at).toLocaleDateString()} {new Date(n.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                      <div className="flex items-center gap-3 mt-1.5">
+                        <p className="text-xs text-slate-400">{new Date(n.created_at).toLocaleDateString()} {new Date(n.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                        {n.sender_id && (
+                          <button onClick={() => { setReplyTo(n); setReplyMessage(''); if (!n.read) onMarkRead(n.id); }} className="text-xs text-blue-500 hover:text-blue-700 font-medium flex items-center gap-1">
+                            <Icon name="Reply" size={12} /> Reply
+                          </button>
+                        )}
+                      </div>
+                      {replyTo?.id === n.id && (
+                        <div className="mt-2 flex gap-2">
+                          <input type="text" value={replyMessage} onChange={e => setReplyMessage(e.target.value)} placeholder="Type a reply..." className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" autoFocus onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) handleReply(); }} />
+                          <button onClick={handleReply} disabled={!replyMessage.trim() || sending} className="px-2.5 py-1.5 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50">
+                            {sending ? <Icon name="Loader2" size={12} className="animate-spin" /> : <Icon name="Send" size={12} />}
+                          </button>
+                          <button onClick={() => setReplyTo(null)} className="px-2 py-1.5 rounded-lg border border-slate-200 text-slate-400 text-xs hover:bg-slate-50">
+                            <Icon name="X" size={12} />
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className="flex flex-col gap-1 flex-shrink-0">
                       {!n.read && (
@@ -548,9 +661,11 @@
     // ============================================
     // SEND NOTE MODAL
     // ============================================
-    function SendNoteModal({ contact, platformUserId, onSend, onInviteInstead, onClose }) {
+    function SendNoteModal({ contact, platformUserId, onSend, onInviteInstead, onClose, currentUser }) {
       const [message, setMessage] = useState('');
       const [sending, setSending] = useState(false);
+      const [sendingEmail, setSendingEmail] = useState(false);
+      const [emailSent, setEmailSent] = useState(false);
 
       const handleSend = async () => {
         if (!message.trim()) return;
@@ -558,6 +673,33 @@
         await onSend(platformUserId, message.trim());
         setSending(false);
         onClose();
+      };
+
+      const handleSendViaEmail = async () => {
+        if (!message.trim() || !contact.email) return;
+        setSendingEmail(true);
+        try {
+          const senderName = currentUser?.user_metadata?.full_name || currentUser?.user_metadata?.name || currentUser?.email?.split('@')[0] || 'Someone';
+          const resp = await fetch('/.netlify/functions/send-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'note',
+              to: contact.email,
+              toName: contact.name,
+              senderName,
+              senderEmail: currentUser?.email || '',
+              message: message.trim()
+            })
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || 'Send failed');
+          setEmailSent(true);
+          setTimeout(() => onClose(), 1500);
+        } catch (err) {
+          alert('Failed to send email: ' + err.message);
+        }
+        setSendingEmail(false);
       };
 
       if (!platformUserId) {
@@ -569,11 +711,27 @@
                   <Icon name="UserPlus" size={24} className="text-slate-400" />
                 </div>
                 <h3 className="text-lg font-semibold text-slate-800">{contact.name} isn't on the platform yet</h3>
-                <p className="text-sm text-slate-500 mt-2">You can only send notes to contacts who have an account. Would you like to invite them?</p>
+                <p className="text-sm text-slate-500 mt-2">
+                  {contact.email 
+                    ? 'You can send them a note via email, or invite them to join the platform.'
+                    : 'You can only send notes to contacts who have an account. Would you like to invite them?'}
+                </p>
               </div>
-              <div className="flex gap-3">
-                <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
-                <button onClick={() => { onClose(); onInviteInstead(contact); }} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600">Invite Instead</button>
+              {contact.email && (
+                <div className="mb-3">
+                  <textarea value={message} onChange={e => setMessage(e.target.value)} placeholder="Write your note..." className="w-full h-24 p-3 rounded-xl border border-slate-200 bg-slate-50 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/20" autoFocus />
+                </div>
+              )}
+              <div className="flex flex-col gap-2">
+                {contact.email && (
+                  <button onClick={handleSendViaEmail} disabled={!message.trim() || sendingEmail || emailSent} className={"w-full px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 " + (emailSent ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50')}>
+                    {emailSent ? (<><Icon name="Check" size={14} /> Sent!</>) : sendingEmail ? (<><Icon name="Loader2" size={14} className="animate-spin" /> Sending...</>) : (<><Icon name="Mail" size={14} /> Send via Email</>)}
+                  </button>
+                )}
+                <div className="flex gap-2">
+                  <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+                  <button onClick={() => { onClose(); onInviteInstead(contact); }} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600">Invite to Platform</button>
+                </div>
               </div>
             </div>
           </div>
@@ -584,7 +742,7 @@
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-slate-800 mb-1">Send a Note to {contact.name}</h3>
-            <p className="text-sm text-slate-500 mb-4">This will appear in their notifications.</p>
+            <p className="text-sm text-slate-500 mb-4">This will appear in their notifications{contact.email ? ' and they\'ll get an email.' : '.'}</p>
             <textarea value={message} onChange={e => setMessage(e.target.value)} placeholder="Write your note..." className="w-full h-32 p-3 rounded-xl border border-slate-200 bg-slate-50 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/20" autoFocus />
             <div className="flex gap-3 mt-4">
               <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
@@ -600,10 +758,12 @@
     // ============================================
     // INVITE MODAL
     // ============================================
-    function InviteModal({ contact, inviteLink, onCreateInvite, onClose }) {
+    function InviteModal({ contact, inviteLink, onCreateInvite, senderName, onClose }) {
       const [copied, setCopied] = useState(false);
       const [creating, setCreating] = useState(false);
       const [link, setLink] = useState(inviteLink);
+      const [emailStatus, setEmailStatus] = useState(null); // null | 'sending' | 'sent' | 'failed'
+      const [emailError, setEmailError] = useState('');
 
       const handleCreate = async () => {
         setCreating(true);
@@ -620,27 +780,155 @@
         }
       };
 
+      const sendEmailInvite = async () => {
+        if (!link || !contact.email) return;
+        setEmailStatus('sending');
+        setEmailError('');
+        try {
+          const resp = await fetch('/.netlify/functions/send-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'invite',
+              to: contact.email,
+              toName: contact.name,
+              senderName: senderName || 'A colleague',
+              inviteLink: link
+            })
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || 'Send failed');
+          setEmailStatus('sent');
+        } catch (err) {
+          setEmailStatus('failed');
+          setEmailError(err.message);
+        }
+      };
+
       return (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-slate-800 mb-1">Invite {contact.name}</h3>
-            <p className="text-sm text-slate-500 mb-4">Generate an invite link they can use to join the platform and create an account.</p>
+            <p className="text-sm text-slate-500 mb-4">
+              {contact.email 
+                ? 'Send an invite email or generate a link to share manually.' 
+                : 'Generate an invite link they can use to join the platform and create an account.'}
+            </p>
             {!link ? (
               <button onClick={handleCreate} disabled={creating} className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-medium hover:from-amber-600 hover:to-orange-600 disabled:opacity-50 flex items-center justify-center gap-2">
                 {creating ? <Icon name="Loader2" size={16} className="animate-spin" /> : <Icon name="Link" size={16} />} Generate Invite Link
               </button>
             ) : (
-              <div>
-                <div className="flex items-center gap-2 p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <input type="text" value={link} readOnly className="flex-1 bg-transparent text-sm text-slate-700 outline-none truncate" />
-                  <button onClick={copyLink} className={"px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 " + (copied ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700 hover:bg-amber-200')}>
-                    <Icon name={copied ? "Check" : "Copy"} size={14} /> {copied ? 'Copied!' : 'Copy'}
-                  </button>
+              <div className="space-y-3">
+                {/* Email send option */}
+                {contact.email && (
+                  <div className="p-3 rounded-lg bg-purple-50 border border-purple-100">
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-purple-800">Send via email</p>
+                        <p className="text-xs text-purple-500 truncate">{contact.email}</p>
+                      </div>
+                      {emailStatus === 'sent' ? (
+                        <span className="px-3 py-1.5 rounded-lg bg-emerald-100 text-emerald-700 text-sm font-medium flex items-center gap-1">
+                          <Icon name="Check" size={14} /> Sent!
+                        </span>
+                      ) : (
+                        <button onClick={sendEmailInvite} disabled={emailStatus === 'sending'} className="px-3 py-1.5 rounded-lg bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 disabled:opacity-50 flex items-center gap-1">
+                          {emailStatus === 'sending' ? <Icon name="Loader2" size={14} className="animate-spin" /> : <Icon name="Mail" size={14} />}
+                          {emailStatus === 'sending' ? 'Sending...' : 'Send Email'}
+                        </button>
+                      )}
+                    </div>
+                    {emailStatus === 'failed' && (
+                      <p className="text-xs text-red-500 mt-1">{emailError || 'Failed to send. Try copying the link instead.'}</p>
+                    )}
+                  </div>
+                )}
+                {/* Copy link option */}
+                <div>
+                  <p className="text-xs text-slate-500 mb-1.5 font-medium">{contact.email ? 'Or copy the link:' : 'Share this link:'}</p>
+                  <div className="flex items-center gap-2 p-3 rounded-lg bg-slate-50 border border-slate-200">
+                    <input type="text" value={link} readOnly className="flex-1 bg-transparent text-sm text-slate-700 outline-none truncate" />
+                    <button onClick={copyLink} className={"px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 " + (copied ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700 hover:bg-amber-200')}>
+                      <Icon name={copied ? "Check" : "Copy"} size={14} /> {copied ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
                 </div>
-                <p className="text-xs text-slate-400 mt-2">Share this link with {contact.name} via email, text, or any messaging platform.</p>
               </div>
             )}
             <button onClick={onClose} className="w-full mt-4 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Close</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================
+    // MANUAL ADD CONTACT MODAL
+    // ============================================
+    function ManualAddContactModal({ onAdd, onClose }) {
+      const [name, setName] = useState('');
+      const [email, setEmail] = useState('');
+      const [company, setCompany] = useState('');
+      const [position, setPosition] = useState('');
+      const [notes, setNotes] = useState('');
+      const [error, setError] = useState('');
+
+      const handleAdd = () => {
+        if (!name.trim()) { setError('Name is required'); return; }
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError('Invalid email format'); return; }
+        const nameParts = name.trim().split(/\s+/);
+        const firstName = nameParts[0] || '';
+        const lastName = nameParts.slice(1).join(' ') || '';
+        const inferred = (position || company) ? inferSkillsFromTitle(position, company) : { skills: [] };
+        const contact = {
+          id: 'manual-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6),
+          firstName, lastName, name: name.trim(),
+          company: company.trim(), position: position.trim(),
+          email: email.trim(), education: '',
+          personalNotes: notes.trim(), tier: 2,
+          inferred, enhanced: null, emailInsights: null,
+          nameConfidence: 'high', source: 'manual'
+        };
+        onAdd(contact);
+        onClose();
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">Add New Contact</h3>
+            <p className="text-sm text-slate-500 mb-4">Manually add a contact to your network.</p>
+            {error && <div className="mb-3 p-2 rounded-lg bg-red-50 text-red-600 text-sm">{error}</div>}
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-medium text-slate-500 mb-1 block">Full Name *</label>
+                <input type="text" value={name} onChange={e => { setName(e.target.value); setError(''); }} placeholder="John Smith" className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" autoFocus />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-500 mb-1 block">Email</label>
+                <input type="email" value={email} onChange={e => { setEmail(e.target.value); setError(''); }} placeholder="john@example.com" className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+              </div>
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="text-xs font-medium text-slate-500 mb-1 block">Company</label>
+                  <input type="text" value={company} onChange={e => setCompany(e.target.value)} placeholder="Acme Inc." className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-medium text-slate-500 mb-1 block">Title / Role</label>
+                  <input type="text" value={position} onChange={e => setPosition(e.target.value)} placeholder="VP of Marketing" className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-500 mb-1 block">Notes</label>
+                <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="How do you know them? Any context..." className="w-full h-20 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/20" />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100">Cancel</button>
+              <button onClick={handleAdd} className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium hover:from-amber-600 hover:to-orange-600 flex items-center justify-center gap-2">
+                <Icon name="UserPlus" size={14} /> Add Contact
+              </button>
+            </div>
           </div>
         </div>
       );
@@ -762,6 +1050,7 @@
       const [inviteContact, setInviteContact] = useState(null);
       const [inviteLink, setInviteLink] = useState(null);
       const [showDedupeModal, setShowDedupeModal] = useState(false);
+      const [showManualAdd, setShowManualAdd] = useState(false);
       const [duplicateGroups, setDuplicateGroups] = useState([]);
       const [platformUserCache, setPlatformUserCache] = useState({});
       const [manualMergeContact, setManualMergeContact] = useState(null);
@@ -798,7 +1087,173 @@
             }
           } catch (err) { /* profile may already exist from trigger */ }
         };
+
+        // Auto-connect: check for pending invitations where I'm the invitee
+        const processIncomingInvites = async () => {
+          try {
+            const { data: pendingInvites, error: invErr } = await supabase
+              .from('invitations')
+              .select('*')
+              .eq('invitee_email', user.email.toLowerCase())
+              .eq('status', 'pending');
+
+            console.log('[Auto-connect] Checking invitations for:', user.email.toLowerCase());
+            if (invErr) { console.warn('[Auto-connect] Query error:', invErr.message); return; }
+            console.log('[Auto-connect] Found pending invites:', pendingInvites?.length || 0);
+
+            if (!pendingInvites || pendingInvites.length === 0) return;
+
+            // Load current contacts
+            const { data: contactRow } = await supabase.from('contacts').select('contact_data').eq('user_id', user.id).single();
+            let myContacts = contactRow?.contact_data || [];
+            let added = 0;
+
+            for (const invite of pendingInvites) {
+              console.log('[Auto-connect] Processing invite from:', invite.inviter_name, invite.inviter_id);
+              
+              // Get inviter's profile using RPC (bypasses RLS)
+              const { data: inviterResults } = await supabase.rpc('check_platform_user', { contact_email: '' });
+              // Fallback: query with inviter_id directly
+              let inviterEmail = null;
+              let inviterName = invite.inviter_name || 'Unknown';
+              
+              // Try to get inviter's email from their user_profiles
+              const { data: inviterProfile, error: profErr } = await supabase
+                .from('user_profiles')
+                .select('user_id, email, display_name')
+                .eq('user_id', invite.inviter_id)
+                .single();
+              
+              if (inviterProfile) {
+                inviterEmail = inviterProfile.email;
+                inviterName = inviterProfile.display_name || inviterName;
+                console.log('[Auto-connect] Found inviter profile:', inviterName, inviterEmail);
+              } else {
+                console.warn('[Auto-connect] Could not find inviter profile, using invitation data. Error:', profErr?.message);
+                // Use whatever we have from the invitation record itself
+              }
+
+              // Check if inviter is already in my contacts
+              const alreadyExists = myContacts.some(c => {
+                if (inviterEmail && c.email?.toLowerCase() === inviterEmail.toLowerCase()) return true;
+                if (c.name?.toLowerCase() === inviterName.toLowerCase()) return true;
+                return false;
+              });
+
+              if (!alreadyExists) {
+                myContacts.push({
+                  id: 'invite-' + invite.id + '-' + Date.now(),
+                  firstName: (inviterName || '').split(' ')[0] || '',
+                  lastName: (inviterName || '').split(' ').slice(1).join(' ') || '',
+                  name: inviterName,
+                  company: '', position: '',
+                  email: inviterEmail || '',
+                  education: '', personalNotes: 'Connected via platform invitation',
+                  tier: 2, inferred: { skills: [] }, enhanced: null, emailInsights: null,
+                  nameConfidence: 'high', source: 'invitation'
+                });
+                added++;
+                console.log('[Auto-connect] Added inviter as contact:', inviterName);
+              } else {
+                console.log('[Auto-connect] Inviter already in contacts, skipping');
+              }
+
+              // Mark invitation as accepted
+              const { error: updateErr } = await supabase.from('invitations').update({ status: 'accepted' }).eq('id', invite.id);
+              if (updateErr) console.warn('[Auto-connect] Failed to mark invite accepted:', updateErr.message);
+            }
+
+            if (added > 0) {
+              setContacts(myContacts);
+              await saveToSupabase(myContacts);
+              setStorageStatus('Auto-connected with ' + added + ' contact(s) who invited you!');
+              setTimeout(() => setStorageStatus(''), 4000);
+            }
+          } catch (err) { console.warn('[Auto-connect] Incoming invites failed:', err); }
+        };
+
+        // Auto-connect: check for accepted invitations where I'm the inviter
+        const processAcceptedInvites = async () => {
+          try {
+            const { data: acceptedInvites, error: invErr } = await supabase
+              .from('invitations')
+              .select('*')
+              .eq('inviter_id', user.id)
+              .eq('status', 'accepted');
+
+            if (invErr) { console.warn('[Auto-connect] Accepted query error:', invErr.message); return; }
+            if (!acceptedInvites || acceptedInvites.length === 0) return;
+
+            const { data: contactRow } = await supabase.from('contacts').select('contact_data').eq('user_id', user.id).single();
+            let myContacts = contactRow?.contact_data || [];
+            let added = 0;
+            const cacheUpdates = {};
+
+            for (const invite of acceptedInvites) {
+              const inviteeEmail = invite.invitee_email?.toLowerCase();
+              if (inviteeEmail) {
+                // Check if invitee is already in contacts
+                const existingIndex = myContacts.findIndex(c =>
+                  c.email?.toLowerCase() === inviteeEmail
+                );
+                
+                if (existingIndex >= 0) {
+                  // Already in contacts — just refresh the platform cache so the icon shows
+                  console.log('[Auto-connect] Invitee already in contacts, refreshing platform status:', inviteeEmail);
+                  try {
+                    const { data } = await supabase.rpc('check_platform_user', { contact_email: inviteeEmail });
+                    if (data?.[0]) {
+                      cacheUpdates[inviteeEmail] = data[0];
+                    }
+                  } catch (err) { /* ignore */ }
+                } else {
+                  myContacts.push({
+                    id: 'invite-accepted-' + invite.id + '-' + Date.now(),
+                    firstName: (invite.invitee_name || '').split(' ')[0] || '',
+                    lastName: (invite.invitee_name || '').split(' ').slice(1).join(' ') || '',
+                    name: invite.invitee_name || inviteeEmail.split('@')[0],
+                    company: '', position: '',
+                    email: inviteeEmail,
+                    education: '', personalNotes: 'Joined via your invitation',
+                    tier: 2, inferred: { skills: [] }, enhanced: null, emailInsights: null,
+                    nameConfidence: 'high', source: 'invitation'
+                  });
+                  added++;
+                }
+              }
+
+              // Mark as completed
+              await supabase.from('invitations').update({ status: 'completed' }).eq('id', invite.id);
+            }
+
+            // Update platform user cache for newly-joined invitees
+            if (Object.keys(cacheUpdates).length > 0) {
+              setPlatformUserCache(prev => ({ ...prev, ...cacheUpdates }));
+            }
+
+            if (added > 0) {
+              setContacts(prev => {
+                const merged = [...prev];
+                myContacts.filter(c => c.source === 'invitation').forEach(ic => {
+                  if (!merged.some(m => m.email?.toLowerCase() === ic.email?.toLowerCase())) {
+                    merged.push(ic);
+                  }
+                });
+                saveToSupabase(merged);
+                return merged;
+              });
+              setStorageStatus(added + ' invited contact(s) joined the platform!');
+              setTimeout(() => setStorageStatus(''), 4000);
+            } else if (Object.keys(cacheUpdates).length > 0) {
+              setStorageStatus('Platform status updated for your contacts');
+              setTimeout(() => setStorageStatus(''), 3000);
+            }
+          } catch (err) { console.warn('[Auto-connect] Accepted invites failed:', err); }
+        };
+
         ensureProfile();
+        // Run auto-connect after a short delay to let contacts load first
+        setTimeout(() => { processIncomingInvites(); processAcceptedInvites(); }, 2000);
       }, [user.id]);
 
       // Load notifications
@@ -848,6 +1303,30 @@
       };
 
       const handleSave = () => saveToSupabase(contacts);
+
+      // Bulk check which contacts are on the platform (for icon display)
+      useEffect(() => {
+        if (contacts.length === 0) return;
+        const checkBatch = async () => {
+          const uncheckedEmails = contacts
+            .filter(c => c.email && platformUserCache[c.email.toLowerCase()] === undefined)
+            .map(c => c.email.toLowerCase());
+          // Dedupe and limit to avoid hammering the API
+          const unique = [...new Set(uncheckedEmails)].slice(0, 50);
+          if (unique.length === 0) return;
+          const newCache = { ...platformUserCache };
+          for (const email of unique) {
+            try {
+              const { data } = await supabase.rpc('check_platform_user', { contact_email: email });
+              newCache[email] = data?.[0] || null;
+            } catch (err) { newCache[email] = null; }
+          }
+          setPlatformUserCache(newCache);
+        };
+        // Delay to let contacts settle first
+        const timer = setTimeout(checkBatch, 3000);
+        return () => clearTimeout(timer);
+      }, [contacts.length]);
 
       // File upload (LinkedIn CSV)
       const handleFileUpload = (event) => {
@@ -1230,7 +1709,7 @@
         } catch (err) { console.error('Failed to load all messages:', err); }
       };
 
-      const sendNoteToContact = async (recipientUserId, message) => {
+      const sendNoteToContact = async (recipientUserId, message, recipientInfo) => {
         try {
           const displayName = user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0];
           await supabase.from('notifications').insert({
@@ -1240,6 +1719,29 @@
             sender_email: user.email,
             message
           });
+
+          // Send email notification if we have recipient's email
+          const recipientEmail = recipientInfo?.email || sendNoteContact?.email;
+          const recipientName = recipientInfo?.name || sendNoteContact?.name;
+          if (recipientEmail) {
+            try {
+              await fetch('/.netlify/functions/send-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  type: 'note',
+                  to: recipientEmail,
+                  toName: recipientName,
+                  senderName: displayName,
+                  senderEmail: user.email,
+                  message
+                })
+              });
+            } catch (emailErr) {
+              console.warn('Email notification failed (platform note still sent):', emailErr);
+            }
+          }
+
           setStorageStatus('Note sent!');
           setTimeout(() => setStorageStatus(''), 2000);
         } catch (err) {
@@ -1273,13 +1775,13 @@
           const { data, error } = await supabase.from('invitations').insert({
             inviter_id: user.id,
             inviter_name: displayName,
-            invitee_email: contact.email || '',
+            invitee_email: (contact.email || '').toLowerCase(),
             invitee_name: contact.name,
             status: 'pending'
           }).select().single();
           if (error) throw error;
           const baseUrl = window.location.origin;
-          const link = baseUrl + '/?ref=' + encodeURIComponent(displayName);
+          const link = baseUrl + '/?invite=' + data.id + '&ref=' + encodeURIComponent(displayName);
           setInviteLink(link);
           return link;
         } catch (err) {
@@ -1355,6 +1857,15 @@
         setTimeout(() => setStorageStatus(''), 4000);
       };
 
+      // ====== Manual Add Contact ======
+      const handleManualAddContact = async (contact) => {
+        const updatedContacts = [...contacts, contact];
+        setContacts(updatedContacts);
+        await saveToSupabase(updatedContacts);
+        setStorageStatus('Added "' + contact.name + '" to your contacts');
+        setTimeout(() => setStorageStatus(''), 3000);
+      };
+
       // Filtered and sorted contacts
       const filteredContacts = useMemo(() => {
         return contacts.filter(c => {
@@ -1422,7 +1933,7 @@
                         <span className="absolute -top-0.5 -right-0.5 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center font-medium">{notifications.length}</span>
                       )}
                     </button>
-                    {showNotifications && <NotificationPanel notifications={notifications} allMessages={allMessages} onMarkRead={markNotificationRead} onDelete={deleteNotification} onClose={() => setShowNotifications(false)} onLoadAll={loadAllMessages} />}
+                    {showNotifications && <NotificationPanel notifications={notifications} allMessages={allMessages} onMarkRead={markNotificationRead} onDelete={deleteNotification} onClose={() => setShowNotifications(false)} onLoadAll={loadAllMessages} onReply={sendNoteToContact} />}
                   </div>
                   
                   {!isGoogleConnected ? (
@@ -1560,6 +2071,9 @@
                 <button onClick={runDedupe} className="px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 text-sm text-purple-700 hover:bg-purple-100 flex items-center gap-2 ml-auto">
                   <Icon name="GitMerge" size={14} /> Find Duplicates
                 </button>
+                <button onClick={() => setShowManualAdd(true)} className="px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-sm text-emerald-700 hover:bg-emerald-100 flex items-center gap-2">
+                  <Icon name="UserPlus" size={14} /> Add Contact
+                </button>
               </div>
               {selectedIds.size > 0 && !bulkProgress && (
                 <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-50 border border-amber-200 flex-wrap">
@@ -1589,8 +2103,15 @@
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-start gap-3">
                         <input type="checkbox" checked={selectedIds.has(contact.id)} onChange={(e) => toggleSelect(contact.id, e)} onClick={(e) => e.stopPropagation()} className="mt-1 w-4 h-4 rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer" />
-                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center text-slate-500 font-semibold text-lg">
-                          {contact.firstName?.[0]}{contact.lastName?.[0]}
+                        <div className="relative">
+                          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center text-slate-500 font-semibold text-lg">
+                            {contact.firstName?.[0]}{contact.lastName?.[0]}
+                          </div>
+                          {(contact.source === 'invitation' || platformUserCache[contact.email?.toLowerCase()]?.found_user_id) && (
+                            <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center ring-2 ring-white" title="On platform">
+                              <Icon name="Check" size={10} className="text-white" />
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div className="flex flex-col items-end gap-1">
@@ -1634,7 +2155,12 @@
                     {filteredContacts.map(contact => (
                       <tr key={contact.id} onClick={() => { setSelectedContact(contact); setActiveTab('profile'); setEditingEmail(false); setNewSkillInput(''); }} className={"hover:bg-slate-50 cursor-pointer " + (selectedIds.has(contact.id) ? 'bg-amber-50' : '')}>
                         <td className="px-3 py-2"><input type="checkbox" checked={selectedIds.has(contact.id)} onChange={(e) => toggleSelect(contact.id, e)} onClick={(e) => e.stopPropagation()} className="w-4 h-4 rounded" /></td>
-                        <td className="px-3 py-2"><span className="font-medium text-slate-800">{contact.name}</span></td>
+                        <td className="px-3 py-2">
+                          <span className="font-medium text-slate-800">{contact.name}</span>
+                          {(contact.source === 'invitation' || platformUserCache[contact.email?.toLowerCase()]?.found_user_id) && (
+                            <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-emerald-500 align-middle" title="On platform"><Icon name="Check" size={9} className="text-white" /></span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-sm text-slate-600 hidden md:table-cell">{contact.company || '\u2014'}</td>
                         <td className="px-3 py-2 text-sm text-slate-400 hidden lg:table-cell truncate max-w-[200px]">{contact.email || '\u2014'}</td>
                         <td className="px-3 py-2">
@@ -1663,7 +2189,7 @@
                         {selectedContact.firstName?.[0]}{selectedContact.lastName?.[0]}
                       </div>
                       <div>
-                        <div className="flex items-center gap-2 mb-1 flex-wrap"><h2 className="text-xl font-bold text-slate-800">{selectedContact.name}</h2>{getTierBadge(selectedContact.tier)}</div>
+                        <div className="flex items-center gap-2 mb-1 flex-wrap"><h2 className="text-xl font-bold text-slate-800">{selectedContact.name}</h2>{(selectedContact.source === 'invitation' || platformUserCache[selectedContact.email?.toLowerCase()]?.found_user_id) && (<span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium"><Icon name="Check" size={10} /> On Platform</span>)}{getTierBadge(selectedContact.tier)}</div>
                         <p className="text-slate-600">{selectedContact.position}</p>
                         <p className="text-slate-500 text-sm">{selectedContact.company}</p>
                         {/* Feature #1 & #2: Email display + edit */}
@@ -1818,6 +2344,7 @@
               onSend={sendNoteToContact}
               onInviteInstead={openInvite}
               onClose={() => setSendNoteContact(null)}
+              currentUser={user}
             />
           )}
 
@@ -1826,7 +2353,15 @@
               contact={inviteContact}
               inviteLink={inviteLink}
               onCreateInvite={createInvitation}
+              senderName={user.user_metadata?.full_name || user.user_metadata?.name || user.email.split('@')[0]}
               onClose={() => { setInviteContact(null); setInviteLink(null); }}
+            />
+          )}
+
+          {showManualAdd && (
+            <ManualAddContactModal
+              onAdd={handleManualAddContact}
+              onClose={() => setShowManualAdd(false)}
             />
           )}
 
