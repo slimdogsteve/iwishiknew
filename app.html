@@ -1665,9 +1665,14 @@
           } catch (err) { /* notifications table may not exist yet */ }
         };
         loadNotifications();
-        // Poll every 30 seconds
-        const interval = setInterval(loadNotifications, 30000);
-        return () => clearInterval(interval);
+        // Only poll when tab is visible
+        let interval = null;
+        const startPolling = () => { if (!interval) interval = setInterval(loadNotifications, 30000); };
+        const stopPolling = () => { if (interval) { clearInterval(interval); interval = null; } };
+        const handleVisibility = () => { document.hidden ? stopPolling() : startPolling(); };
+        document.addEventListener('visibilitychange', handleVisibility);
+        if (!document.hidden) startPolling();
+        return () => { stopPolling(); document.removeEventListener('visibilitychange', handleVisibility); };
       }, [user.id]);
 
       // Parse Google token from URL hash
