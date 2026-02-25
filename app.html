@@ -1667,7 +1667,7 @@
         loadNotifications();
         // Only poll when tab is visible
         let interval = null;
-        const startPolling = () => { if (!interval) interval = setInterval(loadNotifications, 30000); };
+        const startPolling = () => { if (!interval) interval = setInterval(loadNotifications, 600000); };
         const stopPolling = () => { if (interval) { clearInterval(interval); interval = null; } };
         const handleVisibility = () => { document.hidden ? stopPolling() : startPolling(); };
         document.addEventListener('visibilitychange', handleVisibility);
