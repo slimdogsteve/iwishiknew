@@ -1408,7 +1408,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'claude-sonnet-4-20250514',
+              model: 'claude-sonnet-4-6',
               max_tokens: 2500,
               tools: [{ type: 'web_search_20250305', name: 'web_search' }],
               messages: [{ role: 'user', content: 'Use web_search to find information about ' + contact.name + ' who works at ' + contact.company + ' as ' + contact.position + '. Search for their LinkedIn profile, articles, news mentions. After searching, respond with ONLY this JSON: { "summary": "2-3 sentence bio", "expertise": ["skill1", "skill2"], "experience": [], "education": null, "notableWork": [], "personalInterests": [], "communityRoles": [], "confidence": "high/medium/low", "disambiguationNotes": "" }' }]
@@ -1445,7 +1445,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'claude-sonnet-4-20250514',
+              model: 'claude-sonnet-4-6',
               max_tokens: 1000,
               messages: [{ role: 'user', content: 'Analyze these email exchanges between ME (the user, ' + user.email + ') and my CONTACT named ' + contact.name + '.\n\nIMPORTANT: I want to learn about the CONTACT (' + contact.name + '), NOT about me. Only extract information that describes the CONTACT\'s skills, expertise, job, interests, and background. Do NOT attribute my skills or activities to the contact.\n\nEmails:\n' + emailContent + '\n\nReturn JSON only with information ABOUT THE CONTACT (' + contact.name + '):\n{ "expertiseSignals": ["list skills/expertise/job role OF THE CONTACT only"], "projectsMentioned": [], "problemsSolved": [], "communicationStyle": "", "relationshipStrength": "strong/moderate/weak", "keyInsights": "brief summary of who the CONTACT is and what they do" }' }]
             })
@@ -1495,7 +1495,7 @@
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                model: 'claude-sonnet-4-20250514',
+                model: 'claude-sonnet-4-6',
                 max_tokens: 2500,
                 tools: [{ type: 'web_search_20250305', name: 'web_search' }],
                 messages: [{ role: 'user', content: 'Use web_search to find information about ' + contact.name + ' who works at ' + contact.company + ' as ' + contact.position + '. Return ONLY JSON: { "summary": "", "expertise": [], "experience": [], "education": null, "notableWork": [], "personalInterests": [], "communityRoles": [], "confidence": "", "disambiguationNotes": "" }' }]
@@ -1543,7 +1543,7 @@
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                model: 'claude-sonnet-4-20250514',
+                model: 'claude-sonnet-4-6',
                 max_tokens: 1000,
                 messages: [{ role: 'user', content: 'Analyze these email exchanges between ME (the user, ' + user.email + ') and my CONTACT named ' + contact.name + '.\n\nIMPORTANT: I want to learn about the CONTACT (' + contact.name + '), NOT about me.\n\nEmails:\n' + emailText + '\n\nReturn JSON only:\n{ "expertiseSignals": [], "projectsMentioned": [], "problemsSolved": [], "communicationStyle": "", "relationshipStrength": "", "keyInsights": "" }' }]
               })
@@ -1661,7 +1661,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'claude-sonnet-4-20250514',
+              model: 'claude-sonnet-4-6',
               max_tokens: 1000,
               messages: [{ role: 'user', content: 'Find contacts who know about: "' + expertiseQuery + '"\n\nContacts: ' + JSON.stringify(summaries) + '\n\nReturn JSON only, sorted from highest to lowest relevance: { "matches": [{ "name": "", "relevance": "high" or "medium" or "low" (lowercase only), "reason": "", "approachSuggestion": "" }] }. List high relevance matches first, then medium, then low.' }]
             })

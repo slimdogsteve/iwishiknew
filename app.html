@@ -937,7 +937,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'claude-sonnet-4-20250514',
+              model: 'claude-sonnet-4-6',
               max_tokens: 1500,
               tools: [{ type: 'web_search_20250305', name: 'web_search' }],
               messages: [{ role: 'user', content: 'Use web_search to find information about ' + (profile.display_name || '') + ' who works at ' + (profile.company || '') + ' as ' + (profile.title || '') + ' (email: ' + user.email + '). Search for their LinkedIn profile, articles, news. Respond with ONLY this JSON: { "skills": ["skill1", "skill2", ...], "summary": "brief bio" }' }]
@@ -1102,7 +1102,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'claude-sonnet-4-20250514',
+              model: 'claude-sonnet-4-6',
               max_tokens: 1500,
               tools: [{ type: 'web_search_20250305', name: 'web_search' }],
               messages: [{ role: 'user', content: 'Use web_search to find information about ' + displayName + ' who works at ' + company + ' as ' + title + '. Search for their LinkedIn profile, articles, news. Respond with ONLY this JSON: { "summary": "2-3 sentence bio", "skills": ["skill1", "skill2", ...], "interests": [] }' }]
@@ -1874,7 +1874,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'claude-sonnet-4-20250514',
+              model: 'claude-sonnet-4-6',
               max_tokens: 2500,
               tools: [{ type: 'web_search_20250305', name: 'web_search' }],
               messages: [{ role: 'user', content: 'Use web_search to find information about ' + contact.name + ' who works at ' + contact.company + ' as ' + contact.position + '. Search for their LinkedIn profile, articles, news mentions. After searching, respond with ONLY this JSON: { "summary": "2-3 sentence bio", "expertise": ["skill1", "skill2"], "experience": [], "education": null, "notableWork": [], "personalInterests": [], "communityRoles": [], "confidence": "high/medium/low", "disambiguationNotes": "" }' }]
@@ -1911,7 +1911,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'claude-sonnet-4-20250514',
+              model: 'claude-sonnet-4-6',
               max_tokens: 1500,
               messages: [{ role: 'user', content: 'Analyze these email exchanges between ME (the user, ' + user.email + ') and my CONTACT named ' + contact.name + '.\n\nIMPORTANT: I want to learn about the CONTACT (' + contact.name + '), NOT about me. Only extract information that describes the CONTACT\'s skills, expertise, job, interests, and background. Do NOT attribute my skills or activities to the contact.\n\nAlso analyze the email metadata:\n- What is the date of the most recent email?\n- Count how many emails were exchanged (each direction counts as 1) in the most recent 3 months.\n- Additionally, identify any skills/expertise that apply to ME (the user, ' + user.email + ') based on what I discuss in these emails.\n\nEmails:\n' + emailContent + '\n\nReturn JSON only:\n{ "expertiseSignals": ["skills of THE CONTACT only"], "projectsMentioned": [], "problemsSolved": [], "communicationStyle": "", "relationshipStrength": "strong/moderate/weak", "keyInsights": "brief summary of who the CONTACT is", "lastContactDate": "YYYY-MM-DD or null if unclear", "emailFrequency3mo": 0, "mySkills": ["skills/expertise that apply to ME the user, based on what I discuss"] }' }]
             })
@@ -1968,7 +1968,7 @@
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                model: 'claude-sonnet-4-20250514',
+                model: 'claude-sonnet-4-6',
                 max_tokens: 2500,
                 tools: [{ type: 'web_search_20250305', name: 'web_search' }],
                 messages: [{ role: 'user', content: 'Use web_search to find information about ' + contact.name + ' who works at ' + contact.company + ' as ' + contact.position + '. Return ONLY JSON: { "summary": "", "expertise": [], "experience": [], "education": null, "notableWork": [], "personalInterests": [], "communityRoles": [], "confidence": "", "disambiguationNotes": "" }' }]
@@ -2016,7 +2016,7 @@
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                model: 'claude-sonnet-4-20250514',
+                model: 'claude-sonnet-4-6',
                 max_tokens: 1000,
                 messages: [{ role: 'user', content: 'Analyze these email exchanges between ME (the user, ' + user.email + ') and my CONTACT named ' + contact.name + '.\n\nIMPORTANT: I want to learn about the CONTACT (' + contact.name + '), NOT about me.\n\nEmails:\n' + emailText + '\n\nReturn JSON only:\n{ "expertiseSignals": [], "projectsMentioned": [], "problemsSolved": [], "communicationStyle": "", "relationshipStrength": "", "keyInsights": "" }' }]
               })
@@ -2170,7 +2170,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'claude-sonnet-4-20250514',
+              model: 'claude-sonnet-4-6',
               max_tokens: 2500,
               messages: [{ role: 'user', content: 'Find contacts who know about: "' + expertiseQuery + '"\n\nContacts: ' + JSON.stringify(summaries) + '\n\nReturn ONLY a JSON object. Keep reasons brief (under 20 words). Format: { "matches": [{ "name": "", "relevance": "high" or "medium" or "low", "reason": "", "approachSuggestion": "" }] }. If no contacts match, return { "matches": [] }.' }]
             })
